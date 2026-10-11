@@ -1,0 +1,11 @@
+# Skyy voice module tests - Windows 11, Python 3.12 (64-bit)
+numpy
+scipy
+sounddevice
+soundfile
+huggingface_hub
+openvino-genai          # Whisper on CPU / Intel iGPU (and NPU on the Aura)
+piper-tts>=1.3,<2       # Piper TTS (bundles espeak-ng, no separate install; GPL-3.0)
+silero-vad              # standalone VAD test
+openai                  # Jetson LLM test (OpenAI-compatible API)
+pipecat-ai[silero,openai,local,piper,webrtc,runner]==1.12.0   # local = PyAudio (step 6); webrtc+runner = browser audio with echo cancellation (step 7)
