@@ -33,6 +33,7 @@ from bilingual_tts import MultilingualPiperTTSService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
+from skyy_processors import HistoryCap, WakeWordJoiner
 from ov_whisper_stt import OpenVINOWhisperSTTService
 from wake import DEFAULT_WAKE_WORDS, wake_word_strategies
 
@@ -54,6 +55,8 @@ ap.add_argument("--wake-words", default=",".join(DEFAULT_WAKE_WORDS),
                 help="comma-separated spellings of the wake word as Whisper writes them")
 ap.add_argument("--wake-timeout", type=float, default=20.0,
                 help="seconds of silence before Skyy needs the wake word again")
+ap.add_argument("--history", type=int, default=6,
+                help="messages of conversation the LLM sees (6 = last 3 questions + answers)")
 ap.add_argument("--in-device", type=int, help="PyAudio input index (see README)")
 ap.add_argument("--out-device", type=int)
 a = ap.parse_args()
@@ -95,8 +98,12 @@ async def main():
         user_turn_strategies=None if a.no_wake else wake_word_strategies(
             [w.strip() for w in a.wake_words.split(",") if w.strip()], a.wake_timeout)))
 
+    words = [w.strip() for w in a.wake_words.split(",") if w.strip()]
+    # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
+    joiner = [] if a.no_wake else [WakeWordJoiner(words)]
     pipeline = Pipeline([
-        transport.input(), stt, agg.user(), llm, tts, transport.output(), agg.assistant()])
+        transport.input(), stt, *joiner, agg.user(), HistoryCap(a.history),
+        llm, tts, transport.output(), agg.assistant()])
 
     latency = UserBotLatencyObserver()
 

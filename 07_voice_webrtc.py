@@ -6,7 +6,7 @@ to the microphone, so Skyy can talk through the laptop speakers without
 hearing itself. The page is also where the Day 7 kiosk screen can live.
 
 PowerShell:
-  $env:SKYY_JETSON = "192.168.1.50"
+  $env:SKYY_JETSON = "192.168.55.1"   # USB-C link
   python 07_voice_webrtc.py
   # then open http://localhost:7860 in Chrome or Edge, click Connect, allow the mic
 
@@ -14,6 +14,9 @@ Optional:
   $env:SKYY_HALF_DUPLEX = "1"   # also ignore the mic while Skyy speaks (no barge-in)
   $env:SKYY_NO_WAKE = "1"       # answer everything (default: only after "Sky ...")
   $env:SKYY_WAKE_TIMEOUT = "30" # seconds awake after the last activity (default 20)
+  $env:SKYY_WAKE_WORDS = "sky,skye,hey sky"   # spellings that count as the wake word
+  $env:SKYY_STOP_SECS = "0.4"   # silence that ends a turn (default 0.6 with wake word, 0.2 without)
+  $env:SKYY_HISTORY = "6"       # messages of conversation the LLM sees (last 3 Q&A)
   $env:SKYY_STT_DEVICE = "CPU"  # GPU by default; NPU on the Aura
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
 """
@@ -37,6 +40,7 @@ from bilingual_tts import MultilingualPiperTTSService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
+from skyy_processors import HistoryCap, WakeWordJoiner
 from ov_whisper_stt import OpenVINOWhisperSTTService, load_whisper
 from wake import DEFAULT_WAKE_WORDS, wake_word_strategies
 
@@ -53,6 +57,7 @@ WAKE = os.environ.get("SKYY_NO_WAKE") != "1"
 WAKE_WORDS = os.environ.get("SKYY_WAKE_WORDS", ",".join(DEFAULT_WAKE_WORDS)).split(",")
 WAKE_TIMEOUT = float(os.environ.get("SKYY_WAKE_TIMEOUT", "20"))
 # Longer end-of-speech wait with the wake word, so "Sky, ... question" stays one turn
+HISTORY = int(os.environ.get("SKYY_HISTORY", "6"))  # messages the LLM sees (last 3 Q&A)
 STOP_SECS = float(os.environ.get("SKYY_STOP_SECS", "0.6" if WAKE else "0.2"))
 
 SYSTEM = ("You are Skyy, a friendly concierge for a college. Answer in the same language "
@@ -85,8 +90,11 @@ async def bot(runner_args: RunnerArguments):
         user_turn_strategies=wake_word_strategies(
             [w.strip() for w in WAKE_WORDS if w.strip()], WAKE_TIMEOUT) if WAKE else None))
 
+    # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
+    joiner = [WakeWordJoiner([w.strip() for w in WAKE_WORDS if w.strip()])] if WAKE else []
     pipeline = Pipeline([
-        transport.input(), stt, agg.user(), llm, tts, transport.output(), agg.assistant()])
+        transport.input(), stt, *joiner, agg.user(), HistoryCap(HISTORY),
+        llm, tts, transport.output(), agg.assistant()])
 
     latency = UserBotLatencyObserver()
 
