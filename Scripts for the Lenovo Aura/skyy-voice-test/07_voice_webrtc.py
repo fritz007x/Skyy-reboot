@@ -21,8 +21,8 @@ Optional:
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
 
 Knowledge base (MDC FAQ, see kb.py; build the Qdrant collection once with 08_kb_index.py):
-  $env:SKYY_KB_MODE = "rag"     # rag (default): EmbeddingGemma + Qdrant per question
-                                # prompt: whole FAQ in the cached system prompt; off: none
+  $env:SKYY_KB_MODE = "prompt"  # prompt (default): whole FAQ in the cached system prompt; rag: EmbeddingGemma + Qdrant per question
+                                # off: no knowledge base
   $env:SKYY_QDRANT_KEY = "..."  # Qdrant API key (rag mode)
   $env:SKYY_KB_TOP_K = "3"      # FAQ entries added per question (rag mode)
   $env:SKYY_KB_MIN_SCORE = "0.67"  # ignore weaker matches (rag mode; 0.67 suits EmbeddingGemma 2 on this FAQ)

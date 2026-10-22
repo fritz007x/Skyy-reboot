@@ -2,11 +2,11 @@
 
 SKYY_KB_MODE picks how the LLM gets the FAQ:
 
-  rag     (default) Each question is embedded by EmbeddingGemma on the Jetson, Qdrant
+  rag     Each question is embedded by EmbeddingGemma on the Jetson, Qdrant
           returns the closest FAQ entries, and they are added to that question before
           it goes to the LLM. Costs per turn: one embedding call, one Qdrant search
           (tens of ms together) and ~70 extra prompt tokens per entry for the LLM.
-  prompt  The whole FAQ (~2.4k tokens) goes into the system prompt. llama-server keeps
+  prompt  (default) The whole FAQ (~2.4k tokens) goes into the system prompt. llama-server keeps
           the processed system prompt in its cache, so each turn only processes the new
           question: no retrieval round trips and no extra prompt tokens per turn. Usually
           the fastest option while the FAQ is this small. Compare with 09_kb_latency.py.
@@ -34,7 +34,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from skyy_processors import FILLERS
 
 KB_PATH = Path(os.environ.get("SKYY_KB", Path(__file__).resolve().parent.parent / "mdc_faq_kb.jsonl"))
-KB_MODE = os.environ.get("SKYY_KB_MODE", "rag").lower()
+KB_MODE = os.environ.get("SKYY_KB_MODE", "prompt").lower()
 COLLECTION = os.environ.get("SKYY_KB_COLLECTION", "mdc_faq")
 EMBED_PORT = int(os.environ.get("SKYY_EMBED_PORT", "8082"))
 QDRANT_PORT = int(os.environ.get("SKYY_QDRANT_PORT", "6333"))

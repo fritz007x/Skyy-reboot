@@ -321,7 +321,7 @@ Shared modules used by steps 6 and 7:
 | `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper guesses another language (e.g. Urdu for short Spanish), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" as a hint so the wake word isn't heard as "Hi". `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
 | `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. |
 | `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake for 20 s after the last exchange. Includes common Whisper spellings (Skye, Skype, …). |
-| `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=rag` (default): `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question. `prompt`: the whole FAQ (~2.5k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `warm_up()` caches the system prompt at startup. |
+| `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=prompt` (default): the whole FAQ (~2.5k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `rag`: `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question. `warm_up()` caches the system prompt at startup. |
 | `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `HistoryCap`: the LLM only sees the last 6 messages, so old or misheard exchanges don't pile up. |
 
 ### Run in order
