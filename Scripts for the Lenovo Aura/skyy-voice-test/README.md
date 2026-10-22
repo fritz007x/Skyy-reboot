@@ -19,7 +19,7 @@ The two devices talk over a USB-C cable (or the local network). The Jetson is `1
 |---|---|---|---|
 | Main LLM | **Gemma 4 26B-A4B** (instruct, Q4_K_M GGUF) via llama.cpp | 8080 | Writes Skyy's answers. A mixture-of-experts model: 26B parameters in total, about 4B active per token, so it's fast for its size. |
 | Fallback LLM | **Gemma 4 E4B** (instruct, Q4 GGUF) via llama.cpp | 8080 (instead of the 26B) | Smaller and faster. Use it if the 26B is too slow or memory is tight. |
-| Embeddings | **EmbeddingGemma 300M** (GGUF) via llama.cpp | 8082 | Turns text into vectors for knowledge-base search. Multilingual, so a Spanish question can match an English page. |
+| Embeddings | **EmbeddingGemma 2** (Unsloth GGUF `UD-Q4_K_XL`) via llama.cpp | 8082 | Turns text into vectors for knowledge-base search. Multilingual, so a Spanish question can match an English page. Needs a llama.cpp build with EmbeddingGemma 2 support (ggml-org/llama.cpp PR #30054). |
 | Decision model | **Laya** (GGUF) via llama.cpp | 8081 | A fast "System 1" model: picks one option from a list (which skill should answer?) or gives a yes/no score (is this answer grounded?) in tens of milliseconds. Endpoint `/v1/systemone`. |
 | Vector database | **Qdrant** | 6333 (REST), 6334 (gRPC) | Stores the college knowledge base. Hybrid search: dense (EmbeddingGemma) plus sparse (BM25) vectors. |
 
@@ -135,13 +135,16 @@ Each command runs in its own terminal (or as a service, see step 8).
   --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --jinja --reasoning-budget 0
 ```
 
-**EmbeddingGemma**
+**EmbeddingGemma 2**
 ```bash
+hf download unsloth/embeddinggemma-2-GGUF embeddinggemma-2-UD-Q4_K_XL.gguf --local-dir ~/models
 ~/llama.cpp/build/bin/llama-server \
-  -m ~/models/embeddinggemma-300M-Q8_0.gguf \
-  --host 0.0.0.0 --port 8082 -ngl 99 --embeddings
+  -m ~/models/embeddinggemma-2-UD-Q4_K_XL.gguf \
+  --host 0.0.0.0 --port 8082 -ngl 99 --embeddings --pooling mean --ctx-size 2048
 ```
-EmbeddingGemma expects task prefixes: `task: search result | query: <question>` for questions and `title: none | text: <chunk>` for knowledge-base passages.
+EmbeddingGemma 2 uses the same task prefixes as the original model: `task: search result | query: <question>` for questions and `title: none | text: <chunk>` for knowledge-base passages. The knowledge base (`kb.py`) already sends them. The embedding size (768) is read from the model when the Qdrant collection is built, so after switching models re-run `08_kb_index.py` (it recreates the collection) and recalibrate `SKYY_KB_MIN_SCORE`.
+
+The original EmbeddingGemma 300M (`embeddinggemma-300M-Q8_0.gguf`, same port) also works with the same prefixes; use it only as a comparison, since the rest of the setup assumes EmbeddingGemma 2.
 
 **Laya**
 ```bash
@@ -307,7 +310,9 @@ Run them in order: each step checks one piece before the full loop.
 | `05_llm.py` | Gemma on the Jetson: time to first token and tokens/s for EN/ES/FR prompts. Warns if "thinking" is on. |
 | `diag_stream.py` | Network diagnostic: repeats streaming requests over fresh connections to spot a flaky link. |
 | `06_voice_loop.py` | **Full voice loop**, laptop mic and speakers (PyAudio). Half-duplex by default (mic ignored while Skyy talks, so it can't hear itself); `--barge-in` with headphones. |
-| `07_voice_webrtc.py` | **Full voice loop through the browser** (http://localhost:7860). The browser does echo cancellation, noise suppression and auto gain, so it works on speakers and allows interrupting. Configured with `SKYY_*` environment variables. This is the version to build on. |
+| `07_voice_webrtc.py` | **Full voice loop through the browser** (http://localhost:7860). The browser does echo cancellation, noise suppression and auto gain, so it works on speakers and allows interrupting. Configured with `SKYY_*` environment variables. This is the version to build on. Answers from the MDC FAQ knowledge base (`SKYY_KB_MODE`, see `kb.py`). |
+| `08_kb_index.py` | Loads the MDC FAQ (`..\mdc_faq_kb.jsonl`) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
+| `09_kb_latency.py` | Compares the knowledge-base modes (`off`, `prompt`, `rag`): time from question to the LLM's first token, retrieval included, and how many prompt tokens llama-server had to process. |
 
 Shared modules used by steps 6 and 7:
 
@@ -316,6 +321,7 @@ Shared modules used by steps 6 and 7:
 | `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper guesses another language (e.g. Urdu for short Spanish), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" as a hint so the wake word isn't heard as "Hi". `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
 | `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. |
 | `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake for 20 s after the last exchange. Includes common Whisper spellings (Skye, Skype, …). |
+| `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=rag` (default): `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question. `prompt`: the whole FAQ (~2.5k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `warm_up()` caches the system prompt at startup. |
 | `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `HistoryCap`: the LLM only sees the last 6 messages, so old or misheard exchanges don't pile up. |
 
 ### Run in order
