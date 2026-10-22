@@ -33,7 +33,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from skyy_processors import FILLERS
 
-KB_PATH = Path(os.environ.get("SKYY_KB", Path(__file__).resolve().parent.parent / "mdc_faq_kb.jsonl"))
+KB_PATH = Path(os.environ.get("SKYY_KB", Path(__file__).resolve().parent / "mdc_faq_kb.jsonl"))
 KB_MODE = os.environ.get("SKYY_KB_MODE", "prompt").lower()
 COLLECTION = os.environ.get("SKYY_KB_COLLECTION", "mdc_faq")
 EMBED_PORT = int(os.environ.get("SKYY_EMBED_PORT", "8082"))

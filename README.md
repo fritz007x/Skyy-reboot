@@ -262,7 +262,7 @@ This is the same code that will run on the Aura. The Spectre (i7-12700H, Iris Xe
 
 ### Setup (once)
 
-1. Unzip to a short path outside OneDrive, e.g. `C:\skyy\skyy-voice-test`.
+1. Clone the repo to a short path outside OneDrive, e.g. `git clone https://github.com/fritz007x/Skyy-reboot.git C:\skyy`. Run everything from the repo root: the scripts look for `models\` in the current folder.
 2. Settings → Privacy & security → Microphone → turn on **Microphone access** and **Let desktop apps access your microphone**.
 3. Update the Intel graphics driver (Intel Driver & Support Assistant). OpenVINO needs a recent one to use the iGPU.
 4. Sound settings → your microphone → turn **Audio enhancements** off (Windows noise suppression cuts off the start of words). Set the input volume so `01_mic.py` doesn't report clipping.
@@ -275,7 +275,7 @@ This is the same code that will run on the Aura. The Spectre (i7-12700H, Iris Xe
 Later sessions:
 
 ```powershell
-cd C:\skyy\skyy-voice-test
+cd C:\skyy
 .\.venv\Scripts\Activate.ps1      # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 python check_setup.py --jetson 192.168.55.1
 ```
@@ -311,7 +311,7 @@ Run them in order: each step checks one piece before the full loop.
 | `diag_stream.py` | Network diagnostic: repeats streaming requests over fresh connections to spot a flaky link. |
 | `06_voice_loop.py` | **Full voice loop**, laptop mic and speakers (PyAudio). Half-duplex by default (mic ignored while Skyy talks, so it can't hear itself); `--barge-in` with headphones. |
 | `07_voice_webrtc.py` | **Full voice loop through the browser** (http://localhost:7860). The browser does echo cancellation, noise suppression and auto gain, so it works on speakers and allows interrupting. Configured with `SKYY_*` environment variables. This is the version to build on. Answers from the MDC FAQ knowledge base (`SKYY_KB_MODE`, see `kb.py`). |
-| `08_kb_index.py` | Loads the MDC FAQ (`..\mdc_faq_kb.jsonl`) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
+| `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb.jsonl`) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
 | `09_kb_latency.py` | Compares the knowledge-base modes (`off`, `prompt`, `rag`): time from question to the LLM's first token, retrieval included, and how many prompt tokens llama-server had to process. |
 
 Shared modules used by steps 6 and 7:
