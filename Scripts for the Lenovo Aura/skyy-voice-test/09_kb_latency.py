@@ -17,10 +17,8 @@ import argparse, asyncio, statistics, time
 from openai import AsyncOpenAI
 
 import kb
+from skyy_prompt import SYSTEM
 
-BASE = ("You are Skyy, a friendly voice concierge for a college. Always reply in the language "
-        "of the visitor's most recent message. Keep every answer to one or two short sentences, "
-        "because it will be spoken aloud. No lists, no markdown, no emojis.")
 QUESTIONS = [
     "How do I get my official transcript?",
     "¿Cuántos créditos necesito para ser estudiante de tiempo completo?",
@@ -59,7 +57,7 @@ async def first_token(system: str, user: str):
 
 
 async def run_mode(mode: str, base: kb.KnowledgeBase):
-    system = kb.system_prompt(BASE, mode)
+    system = kb.system_prompt(SYSTEM, mode)
     await first_token(system, "Hello")   # caches the system prompt, like warm_up() in step 7
     if mode == "rag":
         await base.search(QUESTIONS[0])
