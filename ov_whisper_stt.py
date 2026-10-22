@@ -1,7 +1,7 @@
 """Pipecat STT service that runs Whisper through OpenVINO GenAI.
 
 Pipecat's built-in WhisperSTTService uses faster-whisper (CPU/CUDA only). This one
-runs on Intel CPU, iGPU or NPU (device="GPU"/"CPU" on the Spectre, "NPU" on the Aura).
+runs on Intel CPU, iGPU or NPU (device="NPU" on the Aura; "GPU" and "CPU" are fallbacks).
 
 Language handling: Whisper's automatic language detection picks from ~100 languages
 and can mistake a short Spanish question for e.g. Urdu. Skyy only supports English,

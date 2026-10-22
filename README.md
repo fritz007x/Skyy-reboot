@@ -4,7 +4,7 @@ Skyy is a voice concierge for a college. You speak to it in English, Spanish or 
 
 | Device | Role |
 |---|---|
-| **Laptop** (Lenovo Aura; an HP Spectre x360 for now) | Runs the voice loop: microphone → speech detection → Whisper (speech to text) → LLM call → Piper (text to speech) → speaker. Built with [Pipecat](https://github.com/pipecat-ai/pipecat). |
+| **Laptop** (Lenovo Aura) | Runs the voice loop: microphone → speech detection → Whisper (speech to text) → LLM call → Piper (text to speech) → speaker. Built with [Pipecat](https://github.com/pipecat-ai/pipecat). |
 | **Jetson AGX Orin 64GB** | AI server: the Gemma LLMs, EmbeddingGemma, Laya and the Qdrant knowledge base. |
 
 The two devices talk over a USB-C cable (or the local network). The Jetson is `192.168.55.1` and the laptop is `192.168.55.100`.
@@ -258,7 +258,7 @@ Test from the laptop: `curl.exe --noproxy "*" http://192.168.55.1:8080/v1/models
 
 ## Part 2 – Laptop voice pipeline (Windows 11)
 
-This is the same code that will run on the Aura. The Spectre (i7-12700H, Iris Xe, **no NPU**) is slower, so treat its numbers as a lower bound. On the Aura, re-run steps 3 and 6 with `NPU`.
+This runs on the Lenovo Aura. Whisper targets the Aura's NPU (`NPU`), with the iGPU (`GPU`) and `CPU` as fallbacks: steps 3 and 6 take the device as an option.
 
 ### Setup (once)
 

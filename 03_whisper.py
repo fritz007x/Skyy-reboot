@@ -7,8 +7,7 @@
 
 Reports load time, median latency per clip, real-time factor (RTF < 1 = faster
 than real time), the transcript and the detected language.
-The Spectre has no NPU; the same script tries "NPU" automatically on the Aura.
-Run it twice on the Aura: the first NPU load compiles the model (slow), the second uses ov_cache/.
+On the Aura the script also tries "NPU". Run it twice on the Aura: the first NPU load compiles the model (slow), the second uses ov_cache/.
 """
 import argparse, glob, os, statistics, time
 import numpy as np

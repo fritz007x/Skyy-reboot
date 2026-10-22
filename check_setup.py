@@ -46,7 +46,7 @@ def ov_devices():
     if not any(d.startswith("GPU") for d in devs):
         raise RuntimeError("no GPU device. Update the Intel graphics driver. Found: " + ", ".join(names))
     if not any(d.startswith("NPU") for d in devs):
-        names.append("no NPU (expected on the Spectre; on the Aura install the Intel NPU driver)")
+        names.append("no NPU (install the Intel NPU driver on the Aura)")
     return "; ".join(names)
 
 
