@@ -19,6 +19,13 @@ Optional:
   $env:SKYY_HISTORY = "6"       # messages of conversation the LLM sees (last 3 Q&A)
   $env:SKYY_STT_DEVICE = "NPU"  # GPU by default; NPU on the Aura (falls back to GPU, then CPU)
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
+
+Knowledge base (MDC FAQ, see kb.py; build the Qdrant collection once with 08_kb_index.py):
+  $env:SKYY_KB_MODE = "rag"     # rag (default): EmbeddingGemma + Qdrant per question
+                                # prompt: whole FAQ in the cached system prompt; off: none
+  $env:SKYY_QDRANT_KEY = "..."  # Qdrant API key (rag mode)
+  $env:SKYY_KB_TOP_K = "3"      # FAQ entries added per question (rag mode)
+  $env:SKYY_KB_MIN_SCORE = "0.67"  # ignore weaker matches (rag mode; 0.67 suits EmbeddingGemma 2 on this FAQ)
 """
 import os
 from pathlib import Path
@@ -40,6 +47,7 @@ from bilingual_tts import MultilingualPiperTTSService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
+import kb
 from skyy_processors import HistoryCap, WakeWordJoiner
 from ov_whisper_stt import OpenVINOWhisperSTTService, load_whisper
 from wake import DEFAULT_WAKE_WORDS, wake_word_strategies
@@ -74,9 +82,12 @@ SYSTEM = ("You are Skyy, a friendly voice concierge for a college. "
     "No lists, no markdown, no emojis. "
     "If the message is only your name, greet the visitor briefly in the language they last used "
     "(English if this is the first message) and ask how you can help.")
+SYSTEM = kb.system_prompt(SYSTEM)   # adds the FAQ rules (and in prompt mode the whole FAQ)
 
 # Load Whisper once at startup, not on every browser connection
 WHISPER_PIPE = load_whisper(WHISPER, STT_DEVICE)
+# Have llama-server process and cache the system prompt now, not on the first question
+kb.warm_up(JETSON, PORT, SYSTEM)
 
 
 async def bot(runner_args: RunnerArguments):
@@ -100,8 +111,10 @@ async def bot(runner_args: RunnerArguments):
 
     # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
     joiner = [WakeWordJoiner([w.strip() for w in WAKE_WORDS if w.strip()])] if WAKE else []
+    # rag mode: add the closest FAQ entries to each question (see kb.py)
+    rag = [kb.KnowledgeInjector(kb.KnowledgeBase(JETSON), strip_words=WAKE_WORDS)] if kb.KB_MODE == "rag" else []
     pipeline = Pipeline([
-        transport.input(), stt, *joiner, agg.user(), HistoryCap(HISTORY),
+        transport.input(), stt, *joiner, agg.user(), HistoryCap(HISTORY), *rag,
         llm, tts, transport.output(), agg.assistant()])
 
     latency = UserBotLatencyObserver()
@@ -117,7 +130,8 @@ async def bot(runner_args: RunnerArguments):
     async def on_disconnected(transport, client):
         await task.cancel()
 
-    logger.info(f"Connected. Half-duplex: {HALF_DUPLEX}. Wake word: {'Sky' if WAKE else 'off'}. Speak through the browser.")
+    logger.info(f"Connected. Half-duplex: {HALF_DUPLEX}. Wake word: {'Sky' if WAKE else 'off'}. "
+                f"Knowledge base: {kb.KB_MODE}. Speak through the browser.")
     await PipelineRunner(handle_sigint=runner_args.handle_sigint).run(task)
 
 
