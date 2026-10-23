@@ -23,16 +23,18 @@ WORDS = {
     "en": set("""the an and or of to in is are was were be it this that these those for with
         on at by from as but not you your we our they their he she his her my can could would
         will what where when how which who hello hi thanks thank open until library building
-        floor class classes help room today there here""".split()),
+        floor class classes help room today there here yes sure certainly course okay""".split()),
     "es": set("""el los las un una unos unas del al y o es está están son para por con sin
         como pero más muy sí no hay su sus mi tu yo usted ustedes nosotros este esta estos
         estas ese esa eso aquí allí dónde donde cuándo cuando qué cómo cuál puede puedo tiene
         tengo hola gracias buenos buenas días tardes noches abierto abierta hasta desde
-        biblioteca edificio piso clase clases ayuda ayudar horario""".split()),
+        biblioteca edificio piso clase clases ayuda ayudar horario claro supuesto
+        entendido perfecto""".split()),
     "fr": set("""le les des du au aux et est sont un une je tu il elle nous vous ils elles
         pour avec sans sur dans par mais pas ne plus très oui non ce cette ces c'est qui où
         quand comment quel quelle peut peux avez avons bonjour bonsoir merci salut ouvert
-        ouverte jusqu bibliothèque bâtiment étage cours aide aider horaires aujourd'hui""".split()),
+        ouverte jusqu bibliothèque bâtiment étage cours aide aider horaires aujourd'hui
+        d'accord certainement entendu parfait""".split()),
 }
 CHARS = {
     "es": re.compile(r"[¿¡ñáíóú]", re.I),

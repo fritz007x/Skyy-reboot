@@ -76,8 +76,9 @@ def _confidence(res) -> float:
 class OpenVINOWhisperSTTService(SegmentedSTTService):
     def __init__(self, *, model_dir: str = "", device: str = "GPU", pipe=None,
                  languages=("en", "es", "fr"), hint: str | None = None, **kwargs):
-        """hint: words Whisper should expect, e.g. "Sky" for the wake word. Passed as
-        Whisper's initial prompt, it makes "Sky" far less likely to come out as "Hi"."""
+        """hint: words Whisper should expect, e.g. "Sky" for the wake word and names like
+        "Gordon Rule". Passed as Whisper's initial prompt, it makes "Sky" far less likely to
+        come out as "Hi" and "Gordon Rule" as "corner rule"."""
         super().__init__(settings=STTSettings(model=model_dir or "openvino-whisper",
                                               language=None), **kwargs)
         self._pipe = pipe or load_whisper(model_dir, device)
@@ -96,13 +97,18 @@ class OpenVINOWhisperSTTService(SegmentedSTTService):
 
     def _generate(self, speech, **kw):
         """pipe.generate with our options. If this device/OpenVINO version rejects
-        initial_prompt (possible on NPU), drop the hint once and carry on without it."""
+        initial_prompt (possible on NPU), drop the hint once and carry on without it.
+
+        Output is capped at ~10 tokens per second of audio: a hallucination loop
+        ("δοδοδο...") then stops early instead of running to Whisper's 448-token limit,
+        which took 2.8 s once. Normal speech is 3-5 tokens per second."""
+        kw.setdefault("max_new_tokens", min(440, int(len(speech) / 16000 * 10) + 20))
         try:
             return self._pipe.generate(speech, **self._gen, **kw)
         except Exception as e:
             if "initial_prompt" not in self._gen:
                 raise
-            logger.warning(f"Whisper rejected the 'Sky' hint on this device ({e}); continuing without it")
+            logger.warning(f"Whisper rejected the hint on this device ({e}); continuing without it")
             self._gen.pop("initial_prompt")
             return self._pipe.generate(speech, **self._gen, **kw)
 

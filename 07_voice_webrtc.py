@@ -18,6 +18,7 @@ Optional:
   $env:SKYY_STOP_SECS = "0.4"   # silence that ends a turn (default 0.4 with wake word, 0.2 without)
   $env:SKYY_HISTORY = "6"       # messages of conversation the LLM sees (last 3 Q&A)
   $env:SKYY_STT_DEVICE = "NPU"  # GPU by default; NPU on the Aura (falls back to GPU, then CPU)
+  $env:SKYY_STT_HINT = "MDC, Gordon Rule"   # names Whisper should expect (default: the FAQ's proper nouns)
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
 
 Knowledge base (MDC FAQ, see kb.py; build the Qdrant collection once with 08_kb_index.py):
@@ -56,6 +57,10 @@ JETSON = os.environ.get("SKYY_JETSON", "192.168.1.50")
 PORT = int(os.environ.get("SKYY_LLM_PORT", "8080"))
 WHISPER = os.environ.get("SKYY_WHISPER", "models/whisper-large-v3-turbo-int8-ov")
 STT_DEVICE = os.environ.get("SKYY_STT_DEVICE", "GPU")
+# Proper nouns from the FAQ that Whisper misheard ("corner rule", "Miami Day"). Only names,
+# no full sentences: the hint is Whisper's initial prompt and could bias its language detection.
+STT_HINT = os.environ.get("SKYY_STT_HINT",
+                          "Miami Dade College, MDC, MDConnect, Gordon Rule, MAP, REVEST, FAFSA.")
 VOICE_EN = os.environ.get("SKYY_VOICE_EN", "en_US-lessac-medium")
 VOICE_ES = os.environ.get("SKYY_VOICE_ES", "es_MX-claude-high")
 VOICE_FR = os.environ.get("SKYY_VOICE_FR", "fr_FR-siwis-medium")
@@ -81,11 +86,12 @@ async def bot(runner_args: RunnerArguments):
     transport = await create_transport(runner_args, {
         "webrtc": lambda: TransportParams(audio_in_enabled=True, audio_out_enabled=True)})
 
-    stt = OpenVINOWhisperSTTService(pipe=WHISPER_PIPE, hint="Sky" if WAKE else None)
+    stt = OpenVINOWhisperSTTService(pipe=WHISPER_PIPE,
+                                    hint=" ".join(filter(None, ["Sky." if WAKE else "", STT_HINT])) or None)
     llm = OpenAILLMService(
         base_url=f"http://{JETSON}:{PORT}/v1", api_key="none",
         default_headers={"Connection": "close"},  # avoid stale keep-alive resets
-        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=150))
+        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=250))
     tts = MultilingualPiperTTSService(voices={"en": VOICE_EN, "es": VOICE_ES, "fr": VOICE_FR},
                                    download_dir=Path("models/piper"))
 
