@@ -62,7 +62,12 @@ for dev in devices:
         print(f"  could not load on {dev}: {e}")
         continue
     print(f"  load (incl. compile): {load:.1f} s")
-    pipe.generate(next(iter(clips.values())).tolist())  # warm-up
+    try:
+        pipe.generate(next(iter(clips.values())).tolist())  # warm-up
+    except Exception as e:  # e.g. NPU ZE_RESULT_ERROR_DEVICE_LOST
+        print(f"  inference failed on {dev}: {str(e).strip().splitlines()[-1]}")
+        del pipe
+        continue
     for path, audio in clips.items():
         times = []
         for _ in range(a.runs):
