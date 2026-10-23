@@ -156,11 +156,21 @@ def with_notes(question: str, hits: list[dict]) -> str:
     return f"FAQ notes:\n{notes}\n\nVisitor: {question}"
 
 
+def without_notes(content: str) -> str:
+    """Undo with_notes(): only the visitor's words."""
+    if content.startswith("FAQ notes:") and "\n\nVisitor: " in content:
+        return content.rsplit("\n\nVisitor: ", 1)[1]
+    return content
+
+
 class KnowledgeInjector(FrameProcessor):
     """rag mode: adds the closest FAQ entries to the visitor's latest message.
 
-    The notes stay in that message for later turns too. That keeps the conversation
-    prefix identical between requests, so llama-server can reuse its cache for it.
+    Only the latest message keeps its notes; earlier questions go back to the visitor's
+    words. HistoryCap drops the oldest exchange every turn, so llama-server has to
+    reprocess the whole history after the system prompt anyway. Without old notes that
+    is a few hundred tokens instead of 2-3k (~1 s on the Jetson). Follow-up questions
+    still see Skyy's earlier answers, just not the FAQ text behind them.
     If the Jetson is slow or down, the question goes through without notes.
     """
 
@@ -181,6 +191,12 @@ class KnowledgeInjector(FrameProcessor):
         i = len(msgs) - 1
         if i < 0 or not isinstance(msgs[i], dict) or msgs[i].get("role") != "user":
             return
+        old = [j for j, m in enumerate(msgs[:i]) if isinstance(m, dict) and m.get("role") == "user"
+               and isinstance(m.get("content"), str) and m["content"].startswith("FAQ notes:")]
+        for j in old:   # notes of earlier questions: keep only the visitor's words
+            msgs[j] = {**msgs[j], "content": without_notes(msgs[j]["content"])}
+        if old:
+            context.set_messages(msgs)
         content = msgs[i].get("content")
         if not isinstance(content, str) or content.startswith("FAQ notes:"):
             return   # not plain text, or already done (e.g. a speculative run of this turn)
