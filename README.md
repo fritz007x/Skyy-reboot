@@ -311,7 +311,7 @@ Run them in order: each step checks one piece before the full loop.
 | `diag_stream.py` | Network diagnostic: repeats streaming requests over fresh connections to spot a flaky link. |
 | `06_voice_loop.py` | **Full voice loop**, laptop mic and speakers (PyAudio). Half-duplex by default (mic ignored while Skyy talks, so it can't hear itself); `--barge-in` with headphones. |
 | `07_voice_webrtc.py` | **Full voice loop through the browser** (http://localhost:7860). The browser does echo cancellation, noise suppression and auto gain, so it works on speakers and allows interrupting. Configured with `SKYY_*` environment variables. This is the version to build on. Answers from the MDC FAQ knowledge base (`SKYY_KB_MODE`, see `kb.py`). |
-| `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb.jsonl`) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
+| `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb_multilingual.jsonl`: each FAQ in English, Spanish and French) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
 | `09_kb_latency.py` | Compares the knowledge-base modes (`off`, `prompt`, `rag`): time from question to the LLM's first token, retrieval included, and how many prompt tokens llama-server had to process. |
 
 Shared modules used by steps 6 and 7:
@@ -321,7 +321,7 @@ Shared modules used by steps 6 and 7:
 | `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper guesses another language (e.g. Urdu for short Spanish), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" as a hint so the wake word isn't heard as "Hi". `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
 | `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. |
 | `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake for 20 s after the last exchange. Includes common Whisper spellings (Skye, Skype, …). |
-| `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=prompt` (default): the whole FAQ (~2.5k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `rag`: `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question. `warm_up()` caches the system prompt at startup. |
+| `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=prompt` (default): the whole English FAQ (~4k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `rag`: `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question (best language per FAQ, so the notes are usually in the visitor's language). `SKYY_KB` points to another FAQ file. `warm_up()` caches the system prompt at startup. |
 | `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `HistoryCap`: the LLM only sees the last 6 messages, so old or misheard exchanges don't pile up. |
 
 ### Run in order

@@ -53,7 +53,8 @@ def build_index():
         "vectors": {"size": len(vectors[0]), "distance": "Cosine"}}).raise_for_status()
     q.put(f"/collections/{kb.COLLECTION}/points?wait=true", json={"points": [
         {"id": kb.point_id(e), "vector": v,
-         "payload": {"kb_id": e["id"], "category": e["category"], "question": e["question"],
+         "payload": {"kb_id": e["id"], "faq_id": kb.faq_id(e), "lang": e.get("lang", "en"),
+                     "category": e["category"], "question": e["question"],
                      "text": e["text"], "source_url": e["source_url"]}}
         for e, v in zip(entries, vectors)]}).raise_for_status()
     n = q.post(f"/collections/{kb.COLLECTION}/points/count", json={"exact": True}).json()["result"]["count"]

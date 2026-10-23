@@ -1,12 +1,16 @@
-"""Knowledge base for Skyy: the MDC FAQ (mdc_faq_kb.jsonl), as RAG or as one cached prompt.
+"""Knowledge base for Skyy: the MDC FAQ (mdc_faq_kb_multilingual.jsonl), as RAG or as one cached prompt.
+
+Each FAQ is in the file three times (en, es, fr), with the same faq_id. In rag mode all
+three are indexed, so a Spanish or French question finds the entry in its own language.
+In prompt mode only the English entries go into the system prompt.
 
 SKYY_KB_MODE picks how the LLM gets the FAQ:
 
   rag     Each question is embedded by EmbeddingGemma on the Jetson, Qdrant
-          returns the closest FAQ entries, and they are added to that question before
+          returns the closest FAQ entries (one per faq_id), and they are added to that question before
           it goes to the LLM. Costs per turn: one embedding call, one Qdrant search
           (tens of ms together) and ~70 extra prompt tokens per entry for the LLM.
-  prompt  (default) The whole FAQ (~2.4k tokens) goes into the system prompt. llama-server keeps
+  prompt  (default) The whole English FAQ (~4k tokens) goes into the system prompt. llama-server keeps
           the processed system prompt in its cache, so each turn only processes the new
           question: no retrieval round trips and no extra prompt tokens per turn. Usually
           the fastest option while the FAQ is this small. Compare with 09_kb_latency.py.
@@ -33,7 +37,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from skyy_processors import FILLERS
 
-KB_PATH = Path(os.environ.get("SKYY_KB", Path(__file__).resolve().parent / "mdc_faq_kb.jsonl"))
+KB_PATH = Path(os.environ.get("SKYY_KB", Path(__file__).resolve().parent / "mdc_faq_kb_multilingual.jsonl"))
 KB_MODE = os.environ.get("SKYY_KB_MODE", "prompt").lower()
 COLLECTION = os.environ.get("SKYY_KB_COLLECTION", "mdc_faq")
 EMBED_PORT = int(os.environ.get("SKYY_EMBED_PORT", "8082"))
@@ -42,12 +46,14 @@ QDRANT_KEY = os.environ.get("SKYY_QDRANT_KEY", "")
 TOP_K = int(os.environ.get("SKYY_KB_TOP_K", "3"))
 MIN_SCORE = float(os.environ.get("SKYY_KB_MIN_SCORE", "0"))  # calibrate with 08_kb_index.py --test
 
-# Added to the system prompt in rag and prompt mode. The FAQ is in English, so remind
-# the model that it is not a language signal (see the LANGUAGE RULE in the system prompt).
+# Added to the system prompt in rag and prompt mode. The notes can be in another language
+# than the visitor's, so remind the model that they are not a language signal (see the
+# LANGUAGE RULE in the system prompt).
 KB_RULES = (" Answer college questions using only the FAQ notes you are given. If the notes "
             "don't cover the question, say you don't have that information and suggest the "
-            "College Information Center at 305-237-8888. The FAQ notes are in English; they "
-            "are not a language signal, so still reply in the language of the visitor's message.")
+            "College Information Center at 305-237-8888. The FAQ notes may be in a different language "
+            "than the visitor's; they are not a language signal, so still reply in the language "
+            "of the visitor's message.")
 
 # EmbeddingGemma task prefixes (see README, Part 1 step 6)
 QUERY_PREFIX = "task: search result | query: "
@@ -56,6 +62,14 @@ QUERY_PREFIX = "task: search result | query: "
 def load_kb(path=KB_PATH) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def faq_id(e: dict) -> str:
+    return e.get("faq_id", e["id"])   # the older English-only file has no faq_id
+
+
+def note(e: dict) -> str:
+    return " ".join(e["text"].split())   # one line per note ("question\nanswer" in the file)
 
 
 def doc_text(e: dict) -> str:
@@ -69,8 +83,9 @@ def point_id(e: dict) -> str:
 
 
 def kb_prompt(entries: list[dict]) -> str:
-    """The whole FAQ as one block for the system prompt (prompt mode)."""
-    return "\n\nFAQ notes:\n" + "\n".join(f"- {e['text']}" for e in entries)
+    """The whole English FAQ as one block for the system prompt (prompt mode)."""
+    return "\n\nFAQ notes:\n" + "\n".join(f"- {note(e)}" for e in entries
+                                         if e.get("lang", "en") == "en")
 
 
 def system_prompt(base: str, mode: str = KB_MODE) -> str:
@@ -108,17 +123,26 @@ class KnowledgeBase:
         return [d["embedding"] for d in sorted(r.json()["data"], key=lambda d: d["index"])]
 
     async def search(self, question: str, k: int = TOP_K, min_score: float = MIN_SCORE):
-        """Returns (hits, embed_ms, search_ms); each hit is the entry's payload plus its score."""
+        """Returns (hits, embed_ms, search_ms); each hit is the entry's payload plus its score.
+
+        Asks Qdrant for 3*k points, because one FAQ can match in several languages,
+        and keeps the best-scoring language of each FAQ.
+        """
         t0 = time.perf_counter()
         [vector] = await self.embed([QUERY_PREFIX + question])
         t1 = time.perf_counter()
-        body = {"query": vector, "limit": k, "with_payload": True}
+        body = {"query": vector, "limit": 3 * k, "with_payload": True}
         if min_score:
             body["score_threshold"] = min_score
         r = await self._qdrant.post(f"/collections/{COLLECTION}/points/query", json=body)
         r.raise_for_status()
         t2 = time.perf_counter()
-        hits = [{**p["payload"], "score": p["score"]} for p in r.json()["result"]["points"]]
+        hits, seen = [], set()
+        for p in r.json()["result"]["points"]:   # sorted by score, best first
+            fid = p["payload"].get("faq_id", p["payload"]["kb_id"])
+            if fid not in seen and len(hits) < k:
+                seen.add(fid)
+                hits.append({**p["payload"], "score": p["score"]})
         return hits, (t1 - t0) * 1000, (t2 - t1) * 1000
 
     async def aclose(self):
@@ -128,7 +152,7 @@ class KnowledgeBase:
 
 def with_notes(question: str, hits: list[dict]) -> str:
     """The user message the LLM sees in rag mode: FAQ notes first, the visitor's words last."""
-    notes = "\n".join(f"- {h['text']}" for h in hits)
+    notes = "\n".join(f"- {note(h)}" for h in hits)
     return f"FAQ notes:\n{notes}\n\nVisitor: {question}"
 
 
@@ -184,7 +208,7 @@ def warm_up(host: str, port: int, system: str, timeout: float = 120.0):
     """Process the system prompt on llama-server once, before the first visitor.
 
     llama-server reuses the processed start of the previous prompt, so later requests
-    with the same system prompt skip it. In prompt mode that is ~2.4k tokens of FAQ.
+    with the same system prompt skip it. In prompt mode that is ~4k tokens of FAQ.
     """
     t0 = time.perf_counter()
     try:
