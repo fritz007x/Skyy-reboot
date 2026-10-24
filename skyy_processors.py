@@ -10,8 +10,13 @@ WakeWordJoiner  (between STT and the user aggregator)
     The cost is that a lone "Sky" is greeted ~1 s later.
 
 HistoryCap  (between the user aggregator and the LLM)
-    Keeps the system prompt plus only the last `max_messages` messages, so old
-    (and misheard) exchanges don't pile up, slow the LLM down or confuse it.
+    Keeps the system prompt plus at most `max_messages` messages, so old (and
+    misheard) exchanges don't pile up, slow the LLM down or confuse it. It cuts in
+    batches: once over the limit, history drops to the last `keep_exchanges`
+    exchanges. Between cuts each request only appends to the previous one, so
+    llama-server reuses its cached prompt and only processes the new answer and
+    question. Dropping one exchange every turn changed the start of the history
+    each time and made it reprocess the whole history (~0.3 s per turn).
 """
 import asyncio
 import re
@@ -91,9 +96,10 @@ class WakeWordJoiner(FrameProcessor):
 
 
 class HistoryCap(FrameProcessor):
-    def __init__(self, max_messages: int = 6, **kwargs):
+    def __init__(self, max_messages: int = 6, keep_exchanges: int = 1, **kwargs):
         super().__init__(**kwargs)
-        self._max = max_messages   # 6 = last 3 visitor questions + Skyy's answers
+        self._max = max_messages              # 6 = up to 2 earlier exchanges + the new question
+        self._keep = 2 * keep_exchanges + 1   # after a cut: the last exchange(s) + the new question
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -103,7 +109,7 @@ class HistoryCap(FrameProcessor):
             system = [m for m in msgs if role(m) == "system"]
             rest = [m for m in msgs if role(m) != "system"]
             if len(rest) > self._max:
-                tail = rest[-self._max:]
+                tail = rest[-min(self._keep, self._max):]
                 while tail and role(tail[0]) != "user":   # history must start with the visitor
                     tail = tail[1:]
                 frame.context.set_messages(system + tail)

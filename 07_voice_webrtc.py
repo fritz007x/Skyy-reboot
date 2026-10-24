@@ -17,7 +17,8 @@ Optional:
   $env:SKYY_WAKE_WORDS = "sky,skye,hey sky"   # spellings that count as the wake word
   $env:SKYY_STOP_SECS = "0.4"   # silence that ends a turn (default 0.4 with wake word, 0.2 without)
   $env:SKYY_INCOMPLETE_SECS = "1.5"  # ...when Smart Turn thinks the sentence isn't finished (default 1.5)
-  $env:SKYY_HISTORY = "6"       # messages of conversation the LLM sees (last 3 Q&A)
+  $env:SKYY_HISTORY = "6"       # most messages of conversation the LLM sees (up to 2 earlier Q&A + the question)
+  $env:SKYY_HISTORY_KEEP = "1"  # earlier Q&A kept when the history is cut back (default 1)
   $env:SKYY_STT_DEVICE = "NPU"  # GPU by default; NPU on the Aura (falls back to GPU, then CPU)
   $env:SKYY_STT_HINT = "MDC, Gordon Rule"   # names Whisper should expect (default: the FAQ's proper nouns)
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
@@ -71,7 +72,8 @@ WAKE = os.environ.get("SKYY_NO_WAKE") != "1"
 WAKE_WORDS = os.environ.get("SKYY_WAKE_WORDS", ",".join(DEFAULT_WAKE_WORDS)).split(",")
 WAKE_TIMEOUT = float(os.environ.get("SKYY_WAKE_TIMEOUT", "10"))
 # Longer end-of-speech wait with the wake word, so "Sky, ... question" stays one turn
-HISTORY = int(os.environ.get("SKYY_HISTORY", "6"))  # messages the LLM sees (last 3 Q&A)
+HISTORY = int(os.environ.get("SKYY_HISTORY", "6"))  # most messages the LLM sees
+HISTORY_KEEP = int(os.environ.get("SKYY_HISTORY_KEEP", "1"))  # Q&A kept when cut back (see HistoryCap)
 STOP_SECS = float(os.environ.get("SKYY_STOP_SECS", "0.4" if WAKE else "0.2"))
 # Silence after which a turn Smart Turn calls INCOMPLETE ends anyway (Pipecat default: 3)
 INCOMPLETE_SECS = float(os.environ.get("SKYY_INCOMPLETE_SECS", "1.5"))
@@ -114,7 +116,7 @@ async def bot(runner_args: RunnerArguments):
     # rag mode: add the closest FAQ entries to each question (see kb.py)
     rag = [kb.KnowledgeInjector(kb.KnowledgeBase(JETSON), strip_words=WAKE_WORDS)] if kb.KB_MODE == "rag" else []
     pipeline = Pipeline([
-        transport.input(), stt, *joiner, agg.user(), HistoryCap(HISTORY), *rag,
+        transport.input(), stt, *joiner, agg.user(), HistoryCap(HISTORY, HISTORY_KEEP), *rag,
         llm, tts, transport.output(), agg.assistant()])
 
     latency = UserBotLatencyObserver()

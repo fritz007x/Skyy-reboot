@@ -167,8 +167,8 @@ class KnowledgeInjector(FrameProcessor):
     """rag mode: adds the closest FAQ entries to the visitor's latest message.
 
     Only the latest message keeps its notes; earlier questions go back to the visitor's
-    words. HistoryCap drops the oldest exchange every turn, so llama-server has to
-    reprocess the whole history after the system prompt anyway. Without old notes that
+    words. Removing the previous question's notes changes that message, so llama-server
+    reprocesses the history from there on every turn anyway. Without old notes that
     is a few hundred tokens instead of 2-3k (~1 s on the Jetson). Follow-up questions
     still see Skyy's earlier answers, just not the FAQ text behind them.
     If the Jetson is slow or down, the question goes through without notes.
