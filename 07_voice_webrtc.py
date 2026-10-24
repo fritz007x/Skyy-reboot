@@ -89,7 +89,10 @@ async def bot(runner_args: RunnerArguments):
     transport = await create_transport(runner_args, {
         "webrtc": lambda: TransportParams(audio_in_enabled=True, audio_out_enabled=True)})
 
-    stt = OpenVINOWhisperSTTService(pipe=WHISPER_PIPE,
+    # ttfs_p99_latency: how long Pipecat waits for a transcript after speech ends. Whisper
+    # transcribes the whole segment once VAD has waited STOP_SECS, so nothing more can come.
+    # Pipecat's 1.0 s default added 0.6 s to every turn the wake word started (Skyy asleep).
+    stt = OpenVINOWhisperSTTService(pipe=WHISPER_PIPE, ttfs_p99_latency=STOP_SECS,
                                     hint=" ".join(filter(None, ["Sky." if WAKE else "", STT_HINT])) or None)
     llm = OpenAILLMService(
         base_url=f"http://{JETSON}:{PORT}/v1", api_key="none",
