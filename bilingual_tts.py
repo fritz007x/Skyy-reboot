@@ -31,7 +31,8 @@ WORDS = {
     "en": set("""the an and or of to in is are was were be it this that these those for with
         on at by from as but not you your we our they their he she his her my can could would
         will what where when how which who hello hi thanks thank open until library building
-        floor class classes help room today there here yes sure certainly course okay""".split()),
+        floor class classes help room today there here yes sure certainly course okay
+        no""".split()),   # "no" is also Spanish: "No." alone is a tie, decided by the default
     "es": set("""el los las un una unos unas del al y o es está están son para por con sin
         como pero más muy sí no hay su sus mi tu yo usted ustedes nosotros este esta estos
         estas ese esa eso aquí allí dónde donde cuándo cuando qué cómo cuál puede puedo tiene
@@ -39,7 +40,7 @@ WORDS = {
         biblioteca edificio piso clase clases ayuda ayudar horario claro supuesto
         entendido perfecto""".split()),
     "fr": set("""le les des du au aux et est sont un une je tu il elle nous vous ils elles
-        pour avec sans sur dans par mais pas ne plus très oui non ce cette ces c'est qui où
+        pour avec sans sur dans par mais pas ne plus très oui non ou ce cette ces c'est qui où
         quand comment quel quelle peut peux avez avons bonjour bonsoir merci salut ouvert
         ouverte jusqu bibliothèque bâtiment étage cours aide aider horaires aujourd'hui
         d'accord certainement entendu parfait""".split()),
@@ -73,12 +74,18 @@ class EarlyClauseAggregator(SimpleTextAggregator):
     1.3 s while the LLM wrote it. The first EARLY_CHUNKS chunks of each answer are also
     cut at ", " or "; " once they hold MIN_WORDS words and MIN_CHARS characters; after
     that Piper is already talking and later sentences are ready before they're needed.
-    "1,000" (no space) and "Transcript: Request Official" (colon) are never cut.
+    "1,000" (no space) and "Transcript: Request Official" (colon) are never cut, nor is a
+    list of letter grades ("un W, un U, un D ou un F"): no cut after a 1-2 letter word.
+
+    A one-word opener is always its own chunk. Pipecat's sentence splitter takes "No." for
+    the abbreviation of "number" unless an English word follows, so "No. La función ..."
+    used to wait for the whole sentence.
     """
 
     EARLY_CHUNKS = 2   # 2, not 1: a short opener ("Sure.") only plays ~0.4 s
     MIN_WORDS = 4      # shorter fragments sound choppy and are hard to tell apart by language
     MIN_CHARS = 20
+    OPENER = re.compile(r"^(?!(?:dr|mr|mrs|ms|sr|sra|srta|st|mme|mlle|prof)\.)[^\W\d_]+[.!]$", re.I)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -86,10 +93,16 @@ class EarlyClauseAggregator(SimpleTextAggregator):
 
     async def _check_sentence_with_lookahead(self, char: str) -> Aggregation | None:
         result = await super()._check_sentence_with_lookahead(char)
-        if result is None and self._chunks < self.EARLY_CHUNKS and char == " " \
-                and self._text[-2:-1] in (",", ";"):
+        if result is None and self._chunks < self.EARLY_CHUNKS and char == " ":
             clause = self._text.strip()
-            if len(clause) >= self.MIN_CHARS and len(clause.split()) >= self.MIN_WORDS:
+            if self._chunks == 0 and self.OPENER.match(clause):
+                cut = True
+            elif self._text[-2:-1] in (",", ";"):
+                cut = (len(clause) >= self.MIN_CHARS and len(clause.split()) >= self.MIN_WORDS
+                       and len(clause.split()[-1]) > 3)   # last word + comma: "W," is 2 chars
+            else:
+                cut = False
+            if cut:
                 await super().reset()   # empty buffer, lookahead back to idle
                 result = Aggregation(text=clause, type=AggregationType.SENTENCE)
         if result is not None:
@@ -121,8 +134,14 @@ def trim_leading_silence(audio: bytes, sample_rate: int) -> tuple[bytes, bool]:
 
 
 class MultilingualPiperTTSService(PiperTTSService):
-    def __init__(self, *, voices: dict, download_dir: Path = Path("models/piper"), **kwargs):
-        """voices: {"en": "en_US-lessac-medium", "es": "es_MX-claude-high", "fr": "fr_FR-siwis-medium"}"""
+    def __init__(self, *, voices: dict, download_dir: Path = Path("models/piper"),
+                 user_language=None, **kwargs):
+        """voices: {"en": "en_US-lessac-medium", "es": "es_MX-claude-high", "fr": "fr_FR-siwis-medium"}
+        user_language: returns the language of the visitor's last transcript (e.g.
+        lambda: stt.last_language). An answer whose first chunk doesn't tell the language
+        ("No.") is spoken in it, not in the language of the previous answer."""
+        self._user_language = user_language or (lambda: None)
+        self._context_id = None
         super().__init__(download_dir=download_dir,
                          settings=PiperTTSService.Settings(voice=voices["en"]), **kwargs)
         self._voices = {}
@@ -143,6 +162,10 @@ class MultilingualPiperTTSService(PiperTTSService):
             language=self._text_aggregator.language)
 
     async def run_tts(self, text: str, context_id: str):
+        if context_id != self._context_id:   # first chunk of a new answer
+            self._context_id = context_id
+            if self._user_language() in self._voices:
+                self._last_lang = self._user_language()
         lang = detect_language(text, default=self._last_lang)
         if lang not in self._voices:
             lang = "en"

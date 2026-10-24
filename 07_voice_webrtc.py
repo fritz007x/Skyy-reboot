@@ -16,6 +16,7 @@ Optional:
   $env:SKYY_WAKE_TIMEOUT = "30" # seconds awake after the last activity (default 10)
   $env:SKYY_WAKE_WORDS = "sky,skye,hey sky"   # spellings that count as the wake word
   $env:SKYY_STOP_SECS = "0.4"   # silence that ends a turn (default 0.4 with wake word, 0.2 without)
+  $env:SKYY_INCOMPLETE_SECS = "1.5"  # ...when Smart Turn thinks the sentence isn't finished (default 1.5)
   $env:SKYY_HISTORY = "6"       # messages of conversation the LLM sees (last 3 Q&A)
   $env:SKYY_STT_DEVICE = "NPU"  # GPU by default; NPU on the Aura (falls back to GPU, then CPU)
   $env:SKYY_STT_HINT = "MDC, Gordon Rule"   # names Whisper should expect (default: the FAQ's proper nouns)
@@ -72,6 +73,8 @@ WAKE_TIMEOUT = float(os.environ.get("SKYY_WAKE_TIMEOUT", "10"))
 # Longer end-of-speech wait with the wake word, so "Sky, ... question" stays one turn
 HISTORY = int(os.environ.get("SKYY_HISTORY", "6"))  # messages the LLM sees (last 3 Q&A)
 STOP_SECS = float(os.environ.get("SKYY_STOP_SECS", "0.4" if WAKE else "0.2"))
+# Silence after which a turn Smart Turn calls INCOMPLETE ends anyway (Pipecat default: 3)
+INCOMPLETE_SECS = float(os.environ.get("SKYY_INCOMPLETE_SECS", "1.5"))
 
 from skyy_prompt import SYSTEM
 SYSTEM = kb.system_prompt(SYSTEM)   # adds the FAQ rules (and in prompt mode the whole FAQ)
@@ -93,14 +96,15 @@ async def bot(runner_args: RunnerArguments):
         default_headers={"Connection": "close"},  # avoid stale keep-alive resets
         settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=250))
     tts = MultilingualPiperTTSService(voices={"en": VOICE_EN, "es": VOICE_ES, "fr": VOICE_FR},
-                                   download_dir=Path("models/piper"))
+                                   download_dir=Path("models/piper"),
+                                   user_language=lambda: stt.last_language)
 
     context = LLMContext([{"role": "system", "content": SYSTEM}])
     agg = LLMContextAggregatorPair(context, user_params=LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=STOP_SECS)),
         user_mute_strategies=[AlwaysUserMuteStrategy()] if HALF_DUPLEX else [],
         user_turn_strategies=wake_word_strategies(
-            [w.strip() for w in WAKE_WORDS if w.strip()], WAKE_TIMEOUT) if WAKE else None))
+            [w.strip() for w in WAKE_WORDS if w.strip()], WAKE_TIMEOUT, INCOMPLETE_SECS) if WAKE else None))
 
     # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
     joiner = [WakeWordJoiner([w.strip() for w in WAKE_WORDS if w.strip()])] if WAKE else []
