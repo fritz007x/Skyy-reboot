@@ -13,7 +13,7 @@ PowerShell:
 Optional:
   $env:SKYY_HALF_DUPLEX = "1"   # also ignore the mic while Skyy speaks (no barge-in)
   $env:SKYY_NO_WAKE = "1"       # answer everything (default: only after "Sky ...")
-  $env:SKYY_WAKE_TIMEOUT = "30" # seconds awake after the last activity (default 10)
+  $env:SKYY_WAKE_TIMEOUT = "10" # seconds awake after Skyy's last answer (default 6)
   $env:SKYY_WAKE_WORDS = "sky,skye,hey sky"   # spellings that count as the wake word
   $env:SKYY_STOP_SECS = "0.4"   # silence that ends a turn (default 0.4 with wake word, 0.2 without)
   $env:SKYY_INCOMPLETE_SECS = "1.5"  # ...when Smart Turn thinks the sentence isn't finished (default 1.5)
@@ -51,7 +51,7 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
 import kb
-from skyy_processors import HistoryCap, WakeWordJoiner
+from skyy_processors import HistoryCap, SideTalkFilter, WakeWordJoiner
 from ov_whisper_stt import OpenVINOWhisperSTTService, load_whisper
 from wake import DEFAULT_WAKE_WORDS, wake_word_strategies
 
@@ -70,7 +70,7 @@ VOICE_FR = os.environ.get("SKYY_VOICE_FR", "fr_FR-siwis-medium")
 HALF_DUPLEX = os.environ.get("SKYY_HALF_DUPLEX") == "1"
 WAKE = os.environ.get("SKYY_NO_WAKE") != "1"
 WAKE_WORDS = os.environ.get("SKYY_WAKE_WORDS", ",".join(DEFAULT_WAKE_WORDS)).split(",")
-WAKE_TIMEOUT = float(os.environ.get("SKYY_WAKE_TIMEOUT", "10"))
+WAKE_TIMEOUT = float(os.environ.get("SKYY_WAKE_TIMEOUT", "6"))
 # Longer end-of-speech wait with the wake word, so "Sky, ... question" stays one turn
 HISTORY = int(os.environ.get("SKYY_HISTORY", "6"))  # most messages the LLM sees
 HISTORY_KEEP = int(os.environ.get("SKYY_HISTORY_KEEP", "1"))  # Q&A kept when cut back (see HistoryCap)
@@ -99,7 +99,8 @@ async def bot(runner_args: RunnerArguments):
     llm = OpenAILLMService(
         base_url=f"http://{JETSON}:{PORT}/v1", api_key="none",
         default_headers={"Connection": "close"},  # avoid stale keep-alive resets
-        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=250))
+        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=250,
+                                           extra={"extra_body": kb.NO_THINKING}))
     tts = MultilingualPiperTTSService(voices={"en": VOICE_EN, "es": VOICE_ES, "fr": VOICE_FR},
                                    download_dir=Path("models/piper"),
                                    user_language=lambda: stt.last_language)
@@ -112,7 +113,8 @@ async def bot(runner_args: RunnerArguments):
             [w.strip() for w in WAKE_WORDS if w.strip()], WAKE_TIMEOUT, INCOMPLETE_SECS) if WAKE else None))
 
     # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
-    joiner = [WakeWordJoiner([w.strip() for w in WAKE_WORDS if w.strip()])] if WAKE else []
+    # then drop side-talk fragments without the wake word (see SideTalkFilter)
+    joiner = [WakeWordJoiner(WAKE_WORDS), SideTalkFilter(WAKE_WORDS)] if WAKE else []
     # rag mode: add the closest FAQ entries to each question (see kb.py)
     rag = [kb.KnowledgeInjector(kb.KnowledgeBase(JETSON), strip_words=WAKE_WORDS)] if kb.KB_MODE == "rag" else []
     pipeline = Pipeline([

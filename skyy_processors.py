@@ -1,4 +1,4 @@
-"""Two small Pipecat processors for the Skyy voice loops.
+"""Small Pipecat processors for the Skyy voice loops.
 
 WakeWordJoiner  (between STT and the user aggregator)
     Fixes "Sky ... <pause> ... where is the library?" being split into two turns.
@@ -8,6 +8,10 @@ WakeWordJoiner  (between STT and the user aggregator)
         gets one message: "Sky. Where is the library?"  -> one answer, no greeting
       - if nobody speaks within `hold_secs`, "Sky" is released alone and Skyy greets.
     The cost is that a lone "Sky" is greeted ~1 s later.
+
+SideTalkFilter  (after WakeWordJoiner)
+    Drops short or unfinished transcripts without the wake word, so Skyy doesn't
+    answer bits of other people's conversation while it is awake.
 
 HistoryCap  (between the user aggregator and the LLM)
     Keeps the system prompt plus at most `max_messages` messages, so old (and
@@ -93,6 +97,49 @@ class WakeWordJoiner(FrameProcessor):
     async def cleanup(self):
         await self._cancel_timer()
         await super().cleanup()
+
+
+# Short answers a visitor gives to Skyy's own questions ("Do you mean the Gordon Rule?")
+SHORT_REPLIES = {"yes", "yeah", "no", "sure", "ok", "okay", "thanks", "thank", "you", "please",
+                 "sí", "si", "claro", "gracias", "vale", "oui", "non", "merci", "exactement",
+                 "exactly", "correct", "correcto", "exacto"}
+
+
+class SideTalkFilter(FrameProcessor):
+    """Drops transcripts that look like side conversation, not a question for Skyy.
+
+    While awake, Skyy answers speech without the wake word. During a Zoom test it replied
+    to fragments of people talking nearby: "Let me mute it for a", "After.", "Knowledge
+    base.", "Eso, brother, esos cursos ... yo creo que es". A transcript WITHOUT the wake
+    word is dropped when it has fewer than `min_words` words (unless they are all short
+    replies like "Yes" or "Gracias"), or when it is an unfinished sentence (no final
+    . ? or !, or trailing "...", as Whisper writes speech that broke off). With nothing to
+    send, the turn ends without an answer, Skyy stays silent and soon goes back to sleep.
+    Goes after WakeWordJoiner, so "Sky" + question arrive as one transcript.
+    """
+
+    def __init__(self, wake_words, min_words: int = 3, **kwargs):
+        super().__init__(**kwargs)
+        self._wake = [w.strip().lower() for w in wake_words if w.strip()]
+        self._min_words = min_words
+
+    def is_side_talk(self, text: str) -> bool:
+        words = re.findall(r"\w+", text.lower())
+        joined = f" {' '.join(words)} "
+        if any(f" {w} " in joined for w in self._wake):
+            return False
+        if words and all(w in SHORT_REPLIES for w in words):
+            return False
+        unfinished = not re.search(r"[.?!]\s*$", text) or re.search(r"(\.\.\.|…)\s*$", text)
+        return len(words) < self._min_words or bool(unfinished)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if (isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM
+                and self.is_side_talk(frame.text)):
+            logger.info(f"Ignored as side talk: {frame.text}")
+            return
+        await self.push_frame(frame, direction)
 
 
 class HistoryCap(FrameProcessor):

@@ -220,6 +220,14 @@ class KnowledgeInjector(FrameProcessor):
         await super().cleanup()
 
 
+# Extra request fields for llama-server. Gemma 4 otherwise writes an empty thought block
+# ("<|channel>thought<channel|>", 3 tokens, ~0.13 s on the Orin) before every answer,
+# even with --reasoning-budget 0. Pass as extra={"extra_body": NO_THINKING} in Pipecat.
+# It also removes "<|think|>" from the start of the system prompt, so every request that
+# should reuse the cached prompt (warm_up() included) must send it.
+NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False}}
+
+
 def warm_up(host: str, port: int, system: str, timeout: float = 120.0):
     """Process the system prompt on llama-server once, before the first visitor.
 
@@ -233,7 +241,10 @@ def warm_up(host: str, port: int, system: str, timeout: float = 120.0):
                        headers={"Connection": "close"}, json={
                            "messages": [{"role": "system", "content": system},
                                         {"role": "user", "content": "Hello"}],
-                           "max_tokens": 1, "cache_prompt": True})
+                           "max_tokens": 1, "cache_prompt": True,
+                           # same template options as the voice loop, or the cached
+                           # prompt differs from the first token on ("<|think|>")
+                           **NO_THINKING})
         r.raise_for_status()
         n = r.json().get("timings", {}).get("prompt_n", "?")
         logger.info(f"LLM warmed up: {n} prompt tokens cached in {time.perf_counter() - t0:.1f} s")

@@ -33,7 +33,8 @@ from bilingual_tts import MultilingualPiperTTSService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
-from skyy_processors import HistoryCap, WakeWordJoiner
+import kb
+from skyy_processors import HistoryCap, SideTalkFilter, WakeWordJoiner
 from ov_whisper_stt import OpenVINOWhisperSTTService
 from wake import DEFAULT_WAKE_WORDS, wake_word_strategies
 
@@ -53,8 +54,8 @@ ap.add_argument("--barge-in", action="store_true",
 ap.add_argument("--no-wake", action="store_true", help="answer everything, no wake word needed")
 ap.add_argument("--wake-words", default=",".join(DEFAULT_WAKE_WORDS),
                 help="comma-separated spellings of the wake word as Whisper writes them")
-ap.add_argument("--wake-timeout", type=float, default=20.0,
-                help="seconds of silence before Skyy needs the wake word again")
+ap.add_argument("--wake-timeout", type=float, default=6.0,
+                help="seconds after Skyy's last answer before it needs the wake word again")
 ap.add_argument("--history", type=int, default=6,
                 help="messages of conversation the LLM sees (6 = last 3 questions + answers)")
 ap.add_argument("--in-device", type=int, help="PyAudio input index (see README)")
@@ -83,7 +84,8 @@ async def main():
     llm = OpenAILLMService(
         base_url=f"http://{a.host}:{a.port}/v1", api_key="none",
         default_headers={"Connection": "close"},  # avoid stale keep-alive resets
-        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=150))
+        settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=150,
+                                           extra={"extra_body": kb.NO_THINKING}))
 
     # One Piper voice per language; each sentence is spoken in the voice of its language
     tts = MultilingualPiperTTSService(voices={"en": a.voice_en, "es": a.voice_es, "fr": a.voice_fr},
@@ -100,7 +102,7 @@ async def main():
 
     words = [w.strip() for w in a.wake_words.split(",") if w.strip()]
     # "Sky ... <pause> ... question" -> one turn; lone "Sky" -> greeting (see skyy_processors.py)
-    joiner = [] if a.no_wake else [WakeWordJoiner(words)]
+    joiner = [] if a.no_wake else [WakeWordJoiner(words), SideTalkFilter(words)]
     pipeline = Pipeline([
         transport.input(), stt, *joiner, agg.user(), HistoryCap(a.history),
         llm, tts, transport.output(), agg.assistant()])

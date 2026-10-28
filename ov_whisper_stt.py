@@ -8,6 +8,9 @@ and can mistake a short Spanish question for e.g. Urdu. Skyy only supports Engli
 Spanish and French, so if the automatic result isn't one of those (wrong language code, or
 text in a non-Latin script), the audio is re-transcribed forced to each allowed
 language and the more confident result is kept.
+
+Transcripts that are a repetition loop ("so, so, so, ...", Whisper hallucinating on
+background noise) are dropped.
 """
 import asyncio
 import os
@@ -61,7 +64,20 @@ def load_whisper(model_dir: str, device: str = "GPU"):
 
 
 def _lang_code(res) -> str:
-    return str((getattr(res, "languages", None) or [""])[0]).strip("<|>").lower()
+    """Language Whisper detected, e.g. "it". OpenVINO GenAI 2026 names the field `language`
+    (a string); older versions had `languages` (a list). Reading only `languages` returned
+    nothing, so the code was guessed from the text and Italian came out as [es]."""
+    lang = getattr(res, "language", None) or (getattr(res, "languages", None) or [""])[0]
+    return str(lang or "").strip("<|>").lower()
+
+
+def is_repetition_loop(text: str, min_repeats: int = 6) -> bool:
+    """Whisper hallucination on noise: "So, so, so, so, ..." (one word making up most of it)."""
+    words = re.findall(r"\w+", text.lower())
+    if len(words) < min_repeats:
+        return False
+    top = max(words.count(w) for w in set(words))
+    return top >= min_repeats and top > len(words) / 2
 
 
 def _confidence(res) -> float:
@@ -164,6 +180,9 @@ class OpenVINOWhisperSTTService(SegmentedSTTService):
             language = Language(code)
         except ValueError:
             language = None
+        if text and is_repetition_loop(text):
+            logger.warning(f"Dropped Whisper repetition loop [{code}]: {text[:60]}")
+            return
         self.last_language = code
         if text:
             saved = f"  (audio: {self._last_wav})" if os.environ.get("SKYY_SAVE_AUDIO") else ""
