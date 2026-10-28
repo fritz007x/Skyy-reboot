@@ -4,6 +4,18 @@
   python download_models.py --small          # also Whisper small (faster fallback for the Spectre)
   python download_models.py --voices en_US-lessac-high es_MX-ald-medium   # extra Piper voices
 """
+
+import os
+import ssl
+
+# Disable SSL verification for huggingface_hub and urllib/httpx
+os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
+os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+# Patch standard library SSL context directly
+ssl._create_default_https_context = ssl._create_unverified_context
+
 import argparse, os
 from pathlib import Path
 from huggingface_hub import snapshot_download

@@ -24,8 +24,8 @@ def check(name, fn):
 
 
 print(f"Python {platform.python_version()} ({platform.architecture()[0]}) on {platform.platform()}")
-if sys.version_info[:2] not in ((3, 11), (3, 12)):
-    print("  [WARN] Python 3.12 is recommended (3.11 also works).")
+if sys.version_info[:2] not in ((3, 12), (3, 13)):
+    print("  [WARN] Python 3.13 is recommended (3.12 also works).")
 if sys.prefix == sys.base_prefix:
     print("  [WARN] Not inside the .venv - run .\\.venv\\Scripts\\Activate.ps1 first.")
 

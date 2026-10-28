@@ -259,7 +259,7 @@ Test from the laptop: `curl.exe --noproxy "*" http://192.168.55.1:8080/v1/models
 
 ## Part 2 – Laptop voice pipeline (Windows 11)
 
-This runs on the Lenovo Aura. Whisper targets the Aura's NPU (`NPU`), with the iGPU (`GPU`) and `CPU` as fallbacks: steps 3 and 6 take the device as an option.
+This runs on the Lenovo Aura. Whisper runs on the iGPU (`GPU`) by default. To use the Aura's NPU, pass `--stt-device NPU` (step 6) or set `$env:SKYY_STT_DEVICE="NPU"` (step 7). If a device fails to load, it falls back NPU → GPU → CPU. Step 3 benchmarks every available device (`--devices` picks some).
 
 ### Setup (once)
 
@@ -290,6 +290,7 @@ python check_setup.py --jetson 192.168.55.1
 | `piper-tts` | Text to speech (GPL-3.0; bundles espeak-ng) |
 | `silero-vad` | Standalone speech-detection test |
 | `openai` | Talks to llama-server's OpenAI-compatible API |
+| `httpx` | Knowledge-base calls to EmbeddingGemma and Qdrant, and the LLM warm-up (`kb.py`) |
 | `numpy`, `scipy`, `sounddevice`, `soundfile` | Audio capture, resampling and file I/O |
 | `huggingface_hub` | Model downloads |
 
@@ -301,7 +302,7 @@ Run them in order: each step checks one piece before the full loop.
 
 | Script | What it does |
 |---|---|
-| `setup.ps1` | One-time setup: installs Python 3.12 with winget if needed, creates `.venv`, installs requirements, downloads models and runs `check_setup.py`. |
+| `setup.ps1` | One-time setup: installs Python 3.13 with winget if needed, creates `.venv` (rebuilds it if it was made with another Python version), installs requirements, downloads models and runs `check_setup.py`. |
 | `check_setup.py` | Checks Python version, packages, OpenVINO GPU, audio devices, models and Piper. `--jetson <ip>` also checks the LLM server. |
 | `download_models.py` | Downloads Whisper and the Piper voices. `--small` adds Whisper small; `--voices <names>` adds more voices. Skips files already downloaded. |
 | `01_mic.py` | Lists audio devices, records a few seconds, reports level and clipping, plays it back. `--save samples/en1.wav` records test clips. |
@@ -312,18 +313,19 @@ Run them in order: each step checks one piece before the full loop.
 | `diag_stream.py` | Network diagnostic: repeats streaming requests over fresh connections to spot a flaky link. |
 | `06_voice_loop.py` | **Full voice loop**, laptop mic and speakers (PyAudio). Half-duplex by default (mic ignored while Skyy talks, so it can't hear itself); `--barge-in` with headphones. |
 | `07_voice_webrtc.py` | **Full voice loop through the browser** (http://localhost:7860). The browser does echo cancellation, noise suppression and auto gain, so it works on speakers and allows interrupting. Configured with `SKYY_*` environment variables. This is the version to build on. Answers from the MDC FAQ knowledge base (`SKYY_KB_MODE`, see `kb.py`). |
-| `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb_multilingual.jsonl`: each FAQ in English, Spanish and French) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). `--test` only searches. Needs `SKYY_QDRANT_KEY`. |
+| `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb_multilingual.jsonl`: each FAQ in English, Spanish and French) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). Run as `python 08_kb_index.py --host 192.168.55.1`; `--test` only searches. Needs `SKYY_QDRANT_KEY`. Only needed for `SKYY_KB_MODE=rag`: the default `prompt` mode doesn't use Qdrant. |
 | `09_kb_latency.py` | Compares the knowledge-base modes (`off`, `prompt`, `rag`): time from question to the LLM's first token, retrieval included, and how many prompt tokens llama-server had to process. |
 
 Shared modules used by steps 6 and 7:
 
 | Module | What it does |
 |---|---|
-| `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper guesses another language (e.g. Urdu for short Spanish), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" as a hint so the wake word isn't heard as "Hi". `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
+| `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper detects another language (e.g. Italian or Portuguese from people nearby), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" and the FAQ's names (Gordon Rule, MDConnect, …) as a hint, so the wake word isn't heard as "Hi" (`SKYY_STT_HINT` changes the names). Drops repetition loops ("so, so, so, …") that Whisper produces on background noise. `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
 | `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. |
-| `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake for 20 s after the last exchange. Includes common Whisper spellings (Skye, Skype, …). |
+| `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake until 6 s after its last answer (`--wake-timeout` / `SKYY_WAKE_TIMEOUT`), so follow-up questions don't need the wake word. Other people's speech doesn't keep it awake. Includes common Whisper spellings (Skye, Skype, …). |
 | `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=prompt` (default): the whole English FAQ (~4k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `rag`: `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question (best language per FAQ, so the notes are usually in the visitor's language). `SKYY_KB` points to another FAQ file. `warm_up()` caches the system prompt at startup. |
-| `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `HistoryCap`: the LLM only sees the last 6 messages, so old or misheard exchanges don't pile up. |
+| `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `SideTalkFilter`: while Skyy is awake, speech without "Sky" that is under 3 words or an unfinished sentence ("Let me mute it for a") is ignored as side conversation; short replies like "Yes" or "Gracias" still count. `HistoryCap`: the LLM sees at most 6 messages; once over, the history is cut back to the last exchange, so old or misheard exchanges don't pile up and llama-server can reuse its cached prompt between cuts (`SKYY_HISTORY`, `SKYY_HISTORY_KEEP`). |
+| `skyy_prompt.py` | Skyy's system prompt for step 7: language rule, short spoken answers, how to handle misheard words. `kb.py` adds the FAQ to it. |
 
 ### Run in order
 
@@ -338,7 +340,23 @@ Shared modules used by steps 6 and 7:
 | 6 Loop | `python 06_voice_loop.py --host 192.168.55.1` | You say "Sky, …" and Skyy answers out loud |
 | 7 Browser loop | `$env:SKYY_JETSON="192.168.55.1"; python 07_voice_webrtc.py`, then open http://localhost:7860 in Chrome/Edge and click Connect | Works on speakers without Skyy answering itself |
 
-Step 7 options: `SKYY_HALF_DUPLEX=1` (no interrupting), `SKYY_NO_WAKE=1`, `SKYY_WAKE_TIMEOUT`, `SKYY_WAKE_WORDS`, `SKYY_STOP_SECS`, `SKYY_HISTORY`, `SKYY_STT_DEVICE`, `SKYY_VOICE_EN/ES/FR`. Don't pass `--host` to step 7; that sets the web server's own address.
+Step 7 options (environment variables; the docstring at the top of `07_voice_webrtc.py` describes each one):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SKYY_JETSON`, `SKYY_LLM_PORT` | `192.168.1.50`, `8080` | Where llama-server runs. Set `SKYY_JETSON=192.168.55.1` for USB-C. |
+| `SKYY_HALF_DUPLEX` | off | `1` = mic ignored while Skyy talks (no interrupting) |
+| `SKYY_NO_WAKE` | off | `1` = answer everything, no "Sky" needed |
+| `SKYY_WAKE_WORDS`, `SKYY_WAKE_TIMEOUT` | Whisper spellings of "Sky", `6` | Wake word spellings; seconds awake after Skyy's last answer |
+| `SKYY_STOP_SECS`, `SKYY_INCOMPLETE_SECS` | `0.4`, `1.5` | Silence that ends a turn; the same when the sentence sounds unfinished |
+| `SKYY_HISTORY`, `SKYY_HISTORY_KEEP` | `6`, `1` | Most messages the LLM sees; exchanges kept when the history is cut |
+| `SKYY_STT_DEVICE`, `SKYY_WHISPER`, `SKYY_STT_HINT` | `GPU`, large-v3-turbo int8, FAQ names | Whisper device, model folder and hint words |
+| `SKYY_VOICE_EN/ES/FR` | the three default voices | Piper voice per language |
+| `SKYY_KB_MODE` | `prompt` | Knowledge base: `prompt` (whole FAQ in the cached prompt), `rag` (Qdrant search, see step 08) or `off` |
+| `SKYY_QDRANT_KEY`, `SKYY_KB_TOP_K`, `SKYY_KB_MIN_SCORE` | –, `3`, `0` | `rag` mode only: Qdrant key, entries per question, minimum score |
+| `SKYY_SAVE_AUDIO` | off | `1` = save each Whisper clip to `debug_audio/` |
+
+Don't pass `--host` to step 7; that sets the web server's own address.
 
 Target for the demo: **under ~3 s** from the end of your sentence to Skyy's first word (the `user -> bot latency` line in the log).
 
@@ -365,6 +383,6 @@ Target for the demo: **under ~3 s** from the end of your sentence to Skyy's firs
   `python -c "import pyaudio;p=pyaudio.PyAudio();[print(i,p.get_device_info_by_index(i)['name']) for i in range(p.get_device_count())]"`
   and pass `--in-device N --out-device M`.
 - **Windows shows no audio devices** → restart the audio services (Admin PowerShell: `Restart-Service Audiosrv,AudioEndpointBuilder -Force`), re-enable disabled devices in `mmsys.cpl`, or reboot.
-- **pip fails building PyAudio or aiortc** → you're not on Python 3.12 64-bit; `python check_setup.py` shows the version.
+- **pip fails building PyAudio or aiortc** → you're not on Python 3.13 (or 3.12) 64-bit; `python check_setup.py` shows the version.
 - **"no GPU device"** → update the Intel driver and reboot; use `--devices CPU` / `--stt-device CPU` meanwhile.
 - **Want another Piper voice** → `python download_models.py --voices en_US-amy-medium`; browse voices at https://huggingface.co/rhasspy/piper-voices.

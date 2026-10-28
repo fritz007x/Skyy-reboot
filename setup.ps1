@@ -4,20 +4,43 @@
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 
-Write-Host "`n[1/5] Checking Python 3.12..." -ForegroundColor Cyan
-$py = $null
-try { $py = (& py -3.12 -c "import sys; print(sys.executable)") 2>$null } catch {}
-if (-not $py) {
-    Write-Host "Python 3.12 not found. Installing with winget..."
-    winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+$PyVersion = "3.13"
+$venvPy = ".\.venv\Scripts\python.exe"
+
+Write-Host "`n[1/5] Checking Python $PyVersion..." -ForegroundColor Cyan
+$pyExe = $null
+# Try the py launcher first
+try { $pyExe = (& py "-$PyVersion" -c "import sys; print(sys.executable)") 2>$null } catch {}
+# Fall back to whatever `python` is on PATH, if it is the right version
+if (-not $pyExe) {
+    try {
+        $v = (& python -c "import sys; print('{0}.{1}'.format(*sys.version_info[:2]))" 2>$null)
+        if ($v -and "$v".Trim() -eq $PyVersion) {
+            $pyExe = (& python -c "import sys; print(sys.executable)" 2>$null)
+        }
+    } catch {}
+}
+if (-not $pyExe) {
+    Write-Host "Python $PyVersion not found. Installing with winget..."
+    winget install -e --id "Python.Python.$PyVersion" --accept-source-agreements --accept-package-agreements
     Write-Host "Python installed. Close this window, open a NEW PowerShell, and run setup.ps1 again." -ForegroundColor Yellow
     exit 1
 }
-Write-Host "Using $py"
+Write-Host "Using $pyExe"
 
 Write-Host "`n[2/5] Creating virtual environment .venv ..." -ForegroundColor Cyan
-if (-not (Test-Path .venv)) { & py -3.12 -m venv .venv }
-$venvPy = ".\.venv\Scripts\python.exe"
+# Rebuild .venv if it was made with a different Python
+if (Test-Path .venv) {
+    $venvVer = ""
+    if (Test-Path $venvPy) {
+        $venvVer = "" + (& $venvPy -c "import sys; print('{0}.{1}'.format(*sys.version_info[:2]))" 2>$null)
+    }
+    if ($venvVer.Trim() -ne $PyVersion) {
+        Write-Host "Existing .venv is not Python $PyVersion; removing and rebuilding..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force .venv
+    }
+}
+if (-not (Test-Path .venv)) { & $pyExe -m venv .venv }
 
 Write-Host "`n[3/5] Installing packages (a few minutes)..." -ForegroundColor Cyan
 & $venvPy -m pip install --upgrade pip

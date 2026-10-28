@@ -1,4 +1,4 @@
-# Skyy voice module tests - Windows 11, Python 3.12 (64-bit)
+# Skyy voice module tests - Windows 11, Python 3.13 (64-bit)
 numpy
 scipy
 sounddevice
