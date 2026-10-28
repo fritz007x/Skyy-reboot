@@ -125,14 +125,14 @@ Each command runs in its own terminal (or as a service, see step 8).
 ```bash
 ~/llama.cpp/build/bin/llama-server \
   -m ~/models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf \
-  --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --jinja --reasoning-budget 0
+  --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --parallel 1 --jinja --reasoning-budget 0
 ```
 
 **Gemma 4 E4B (fallback, same port – stop the 26B first)**
 ```bash
 ~/llama.cpp/build/bin/llama-server \
   -m ~/models/gemma-4-E4B-it-Q4_K_M.gguf \
-  --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --jinja --reasoning-budget 0
+  --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --parallel 1 --jinja --reasoning-budget 0
 ```
 
 **EmbeddingGemma 2**
@@ -158,6 +158,7 @@ What the flags do:
 | `--host 0.0.0.0` | Listen on the network, not just the Jetson itself. Without it, the laptop can't connect. |
 | `-ngl 99` | Put every layer on the GPU. |
 | `-c 8192` | Context size. Enough for the system prompt, 3–5 knowledge-base chunks and a short history. Longer contexts slow the Orin down. |
+| `--parallel 1` | One request slot. Skyy holds one conversation at a time, so the whole context belongs to it and the cached system prompt is always reused. With the default 4 slots, quick back-to-back turns that interrupt each other can leave two slots holding the ~4.2k-token prompt, and the next request fails with "Context size has been exceeded". |
 | `--jinja` | Use the model's own chat template (needed for Gemma 4 and tool calling). |
 | `--reasoning-budget 0` | Turn off "thinking". Otherwise the model reasons silently before answering, which adds seconds of delay to a voice reply. |
 
@@ -225,7 +226,7 @@ After=network.target jetson-clocks.service
 
 [Service]
 User=<your-user>
-ExecStart=/home/<your-user>/llama.cpp/build/bin/llama-server -m /home/<your-user>/models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --jinja --reasoning-budget 0
+ExecStart=/home/<your-user>/llama.cpp/build/bin/llama-server -m /home/<your-user>/models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --parallel 1 --jinja --reasoning-budget 0
 Restart=on-failure
 
 [Install]
