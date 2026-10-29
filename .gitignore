@@ -46,3 +46,6 @@ desktop.ini
 
 # OpenVINO compiled-model cache (NPU/GPU)
 ov_cache/
+
+# 10_kb_eval.py output
+eval_results/
