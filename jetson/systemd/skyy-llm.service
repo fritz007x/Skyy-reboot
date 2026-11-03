@@ -1,0 +1,19 @@
+[Unit]
+Description=Skyy main LLM - Gemma (llama-server :8080)
+After=network-online.target jetson-clocks.service
+Wants=network-online.target
+# Give up after 5 failed starts in 5 minutes (e.g. a wrong model path), instead of looping forever
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=@USER@
+# MODEL= lives here, so switching to the E4B fallback is an edit plus a restart
+EnvironmentFile=/etc/skyy/llm.env
+ExecStart=@HOME@/llama.cpp/build/bin/llama-server -m ${MODEL} --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --parallel 1 --jinja --reasoning-budget 0
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

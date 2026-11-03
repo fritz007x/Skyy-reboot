@@ -1,0 +1,17 @@
+[Unit]
+Description=Skyy embeddings - EmbeddingGemma (llama-server :8082)
+After=network-online.target jetson-clocks.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=@USER@
+EnvironmentFile=/etc/skyy/embed.env
+ExecStart=@HOME@/llama.cpp/build/bin/llama-server -m ${MODEL} --host 0.0.0.0 --port 8082 -ngl 99 --embeddings --pooling mean --ctx-size 2048
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

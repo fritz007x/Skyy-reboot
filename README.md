@@ -119,7 +119,7 @@ Gemma models require accepting the license on Hugging Face first (`hf auth login
 
 ### 6. Run the servers
 
-Each command runs in its own terminal (or as a service, see step 8).
+Each command runs in its own terminal. To keep them running, use the services in step 8.
 
 **Gemma 4 26B-A4B (main LLM)**
 ```bash
@@ -215,25 +215,30 @@ curl -H "api-key: <choose-a-key>" http://localhost:6333/collections   # {"result
 
 The knowledge base uses one collection with a dense vector (EmbeddingGemma, 768 dimensions, cosine) and a sparse BM25 vector for hybrid search. Python access: `pip install qdrant-client` in `~/skyy-venv`.
 
-### 8. Start everything at boot (optional)
+### 8. Run the llama-servers as services
 
-Each llama-server can get its own unit, like Qdrant's. Example for the main LLM, `/etc/systemd/system/gemma.service`:
+The units in `jetson/systemd/` run each llama-server under systemd: they start at boot and restart 5 s after a crash (`Restart=on-failure`). If one fails 5 times within 5 minutes, for example because the model path is wrong, systemd stops retrying. Copy the `jetson/` folder to the Jetson and run:
 
-```ini
-[Unit]
-Description=Gemma 4 26B-A4B (llama-server :8080)
-After=network.target jetson-clocks.service
-
-[Service]
-User=<your-user>
-ExecStart=/home/<your-user>/llama.cpp/build/bin/llama-server -m /home/<your-user>/models/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --parallel 1 --jinja --reasoning-budget 0
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo ./jetson/install_services.sh          # main LLM (:8080) and EmbeddingGemma (:8082)
+sudo ./jetson/install_services.sh --laya   # also Laya (:8081)
 ```
 
-Copy it for EmbeddingGemma (`embeddinggemma.service`, port 8082) and Laya (`laya.service`, port 8081). Then run `sudo systemctl enable --now gemma embeddinggemma laya`.
+Stop any llama-server you started by hand first, or the services can't get their ports. The script fills in your user and home folder, puts each model path in `/etc/skyy/<name>.env` (`llm`, `embed`, `laya`), and enables the services. Re-running it keeps existing `.env` files. For Laya, set the real filename in `/etc/skyy/laya.env` first.
+
+| Service | Port | Model file |
+|---|---|---|
+| `skyy-llm` | 8080 | `/etc/skyy/llm.env` |
+| `skyy-embed` | 8082 | `/etc/skyy/embed.env` |
+| `skyy-laya` | 8081 | `/etc/skyy/laya.env` |
+
+```bash
+systemctl status skyy-llm skyy-embed
+journalctl -u skyy-llm -f                  # logs; the 26B takes a while to load
+sudo systemctl restart skyy-llm
+```
+
+To switch to the E4B fallback, set `MODEL=` in `/etc/skyy/llm.env` to the E4B file and run `sudo systemctl restart skyy-llm`. Flag changes go in `jetson/systemd/*.service`; re-run the script to install them.
 
 Memory check with everything running: `jtop` or `tegrastats`. The 26B model plus the others fit comfortably in 64 GB.
 
