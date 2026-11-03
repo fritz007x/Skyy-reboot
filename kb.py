@@ -51,7 +51,9 @@ MIN_SCORE = float(os.environ.get("SKYY_KB_MIN_SCORE", "0"))  # calibrate with 08
 # LANGUAGE RULE in the system prompt).
 KB_RULES = (" Answer college questions using only the FAQ notes you are given. If the notes "
             "don't cover the question, say you don't have that information and suggest the "
-            "College Information Center at 305-237-8888. The FAQ notes may be in a different language "
+            "College Information Center at 305-237-8888. A misheard word doesn't make a "
+            "question uncovered: if a note fits once the word is corrected, answer from that "
+            "note. The FAQ notes may be in a different language "
             "than the visitor's; they are not a language signal, so still reply in the language "
             "of the visitor's message.")
 
