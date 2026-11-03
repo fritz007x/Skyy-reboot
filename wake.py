@@ -44,18 +44,31 @@ class SkyyWakeStrategy(WakePhraseUserTurnStartStrategy):
     `timeout` starts at the wake word and each time Skyy speaks. The visitor's speech only
     keeps Skyy awake until `grace` seconds after they stop, long enough for the transcript
     to arrive. A follow-up question within `timeout` of an answer needs no wake word.
+
+    Speech that starts while Skyy is awake keeps it awake until its transcript arrives
+    (at most `max_turn` seconds): Whisper transcribes a turn only once it ends, so a
+    question with a pause in the middle ("J'ai une dette envers le collège. ... Est-ce que
+    je peux quand même m'inscrire ?") would otherwise arrive after Skyy fell asleep and
+    be dropped.
     """
 
-    def __init__(self, *, grace: float = 2.0, **kwargs):
+    def __init__(self, *, grace: float = 2.0, max_turn: float = 20.0, **kwargs):
         super().__init__(**kwargs)
         self._grace = grace
+        self._max_turn = max_turn
         self._deadline = 0.0
+        self._turn_since = None   # when the visitor started speaking, until the transcript
 
     def _refresh_timeout(self):
         self._deadline = time.monotonic() + self._timeout
 
     def _extend(self):
         self._deadline = max(self._deadline, time.monotonic() + self._grace)
+
+    def _expired(self) -> bool:
+        now = time.monotonic()
+        in_turn = self._turn_since is not None and now - self._turn_since < self._max_turn
+        return now > self._deadline and not in_turn
 
     async def handle_user_turn_started(self):
         if self._state == _WakeState.AWAKE:
@@ -64,15 +77,22 @@ class SkyyWakeStrategy(WakePhraseUserTurnStartStrategy):
     async def _process_awake(self, frame) -> ProcessFrameResult:
         if isinstance(frame, BotSpeakingFrame):
             self._refresh_timeout()
-        elif isinstance(frame, (UserSpeakingFrame, VADUserStartedSpeakingFrame,
-                                VADUserStoppedSpeakingFrame, TranscriptionFrame)):
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
+            if self._turn_since is None:
+                self._turn_since = time.monotonic()
+            self._extend()
+        elif isinstance(frame, TranscriptionFrame):
+            self._turn_since = None
+            self._extend()
+        elif isinstance(frame, (UserSpeakingFrame, VADUserStoppedSpeakingFrame)):
             self._extend()
         return ProcessFrameResult.CONTINUE
 
     async def _timeout_task_handler(self):
         while True:
             await asyncio.sleep(0.2)
-            if self._state == _WakeState.AWAKE and time.monotonic() > self._deadline:
+            if self._state == _WakeState.AWAKE and self._expired():
+                self._turn_since = None
                 self._transition_to_idle()
 
 
