@@ -3,12 +3,16 @@
 Same pipeline as step 6, but audio goes through Chrome/Edge instead of PyAudio.
 The browser applies WebRTC echo cancellation, noise suppression and auto gain
 to the microphone, so Skyy can talk through the laptop speakers without
-hearing itself. The page is also where the Day 7 kiosk screen can live.
+hearing itself.
+
+The page at http://localhost:7860 is the kiosk screen in web/: Finn, the MDC mascot, in
+3D, whose mouth moves while Skyy speaks; /finn/2d.html is the older 2D Finn. Pipecat's
+own test page is still at /client/.
 
 PowerShell:
   $env:SKYY_JETSON = "192.168.55.1"   # USB-C link
   python 07_voice_webrtc.py
-  # then open http://localhost:7860 in Chrome or Edge, click Connect, allow the mic
+  # then open http://localhost:7860 in Chrome or Edge, click "Talk to Skyy", allow the mic
 
 Optional:
   $env:SKYY_HALF_DUPLEX = "1"   # also ignore the mic while Skyy speaks (no barge-in)
@@ -140,5 +144,12 @@ async def bot(runner_args: RunnerArguments):
 
 
 if __name__ == "__main__":
-    from pipecat.runner.run import main
+    from fastapi.responses import RedirectResponse
+    from fastapi.staticfiles import StaticFiles
+    from pipecat.runner.run import app, main
+
+    # The Finn page (web/) at /finn/, and / opens it instead of Pipecat's /client/.
+    # Routes added before main() take precedence over the runner's own "/" redirect.
+    app.mount("/finn", StaticFiles(directory=Path(__file__).parent / "web", html=True), name="finn")
+    app.add_api_route("/", lambda: RedirectResponse("/finn/"), include_in_schema=False)
     main()

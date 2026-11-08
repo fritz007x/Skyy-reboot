@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skyy</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #244b87; overflow: hidden;
+               font-family: "Segoe UI", system-ui, sans-serif; }
+  svg { display: block; width: 100vw; height: 100vh; }
+  #status { position: fixed; left: 50%; bottom: 4vh; transform: translateX(-50%);
+            padding: .5em 1.2em; border-radius: 2em; background: rgba(0, 0, 0, .55);
+            color: #fff; font-size: clamp(16px, 2.4vh, 28px); white-space: nowrap; }
+  #start { position: fixed; left: 50%; bottom: 12vh; transform: translateX(-50%);
+           width: 12em; height: 3.2em;
+           border: 0; border-radius: 2em; background: #fff; color: #1b4f9c;
+           font: 600 clamp(18px, 3vh, 32px) "Segoe UI", system-ui, sans-serif;
+           box-shadow: 0 .3em 1em rgba(0, 0, 0, .35); cursor: pointer; }
+  #start[hidden] { display: none; }
+  .debug { fill: none; stroke: #f0f; stroke-width: 2; }
+</style>
+</head>
+<body>
+<!-- The scene, back to front:
+     - the sunburst: dark base + 36 light rays (drawn by finn.js), measured from the
+       original MDC_Finn.jpg (centre 960,542, one ray every 10 degrees);
+     - a soft glow behind Finn that brightens with the voice;
+     - Finn (finn.png, cut out of the original along his black outline), with the eye
+       (moving highlight, eyelid) and the mouth opening drawn over him, and the lower
+       jaw drawn again on top (clipped to #jaw-outline) so it can rotate open.
+     All coordinates are in the original 1920x1080 image. finn.js moves everything. -->
+<svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="sky-dark" gradientUnits="userSpaceOnUse" cx="960" cy="542" r="1100">
+      <stop offset="0" stop-color="#4aaef4"/>
+      <stop offset=".27" stop-color="#44a6f0"/>
+      <stop offset=".36" stop-color="#3f9ae3"/>
+      <stop offset=".48" stop-color="#3883cd"/>
+      <stop offset=".64" stop-color="#2f66ad"/>
+      <stop offset=".82" stop-color="#275191"/>
+      <stop offset="1" stop-color="#234988"/>
+    </radialGradient>
+    <radialGradient id="sky-light" gradientUnits="userSpaceOnUse" cx="960" cy="542" r="1100">
+      <stop offset="0" stop-color="#5abdf8"/>
+      <stop offset=".27" stop-color="#55b8f6"/>
+      <stop offset=".36" stop-color="#50adf2"/>
+      <stop offset=".48" stop-color="#499ee3"/>
+      <stop offset=".64" stop-color="#3e86cb"/>
+      <stop offset=".82" stop-color="#3167a8"/>
+      <stop offset="1" stop-color="#295490"/>
+    </radialGradient>
+    <radialGradient id="glow-fill">
+      <stop offset="0" stop-color="#e8f6ff" stop-opacity=".9"/>
+      <stop offset=".5" stop-color="#9fd8ff" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#9fd8ff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="jaw-clip">
+      <polygon id="jaw-outline" points="676,558 1006,478 1040,530 1070,600 1064,656 1030,678 960,684
+                                        892,674 860,660 822,646 800,642 788,636 778,622 770,614 742,612
+                                        722,605 697,598 686,590 684,566"/>
+    </clipPath>
+    <clipPath id="mouth-clip"><use href="#mouth"/></clipPath>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#sky-dark)"/>
+  <g id="rays" fill="url(#sky-light)"></g>
+  <ellipse id="glow" cx="955" cy="520" rx="620" ry="560" fill="url(#glow-fill)" opacity="0"/>
+
+  <g id="finn">
+    <image href="finn.png" x="472" y="98" width="966" height="982"/>
+    <g id="eye">
+      <circle cx="881" cy="262" r="11" fill="#0b0d0e"/>   <!-- hides the drawn highlight -->
+      <circle id="glint" cx="881" cy="262" r="8" fill="#fff"/>
+      <polygon id="lid" fill="#0b0d0e" points="850,226 912,226 912,314 832,314 832,258 840,240"/>
+      <path id="lid-line" d="M846,284 Q874,296 905,270" fill="none" stroke="#fff"
+            stroke-width="7" stroke-linecap="round" opacity="0"/>
+    </g>
+    <path id="mouth" fill="#1d0b12" d=""/>
+    <ellipse id="tongue" cx="760" cy="600" rx="60" ry="20" fill="#7a2433"
+             clip-path="url(#mouth-clip)" opacity="0"/>
+    <g id="jaw">
+      <image href="finn.png" x="472" y="98" width="966" height="982" clip-path="url(#jaw-clip)"/>
+    </g>
+  </g>
+</svg>
+<div id="status">Starting…</div>
+<button id="start" hidden>Talk to Skyy</button>
+<audio id="voice" autoplay></audio>
+<script src="voice.js"></script>
+<script src="finn.js"></script>
+<script src="skyy.js"></script>
+</body>
+</html>
