@@ -21,6 +21,7 @@ The two devices talk over a USB-C cable (or the local network). The Jetson is `1
 | Fallback LLM | **Gemma 4 E4B** (instruct, Q4 GGUF) via llama.cpp | 8080 (instead of the 26B) | Smaller and faster. Use it if the 26B is too slow or memory is tight. |
 | Embeddings | **EmbeddingGemma 2** (Unsloth GGUF `UD-Q4_K_XL`) via llama.cpp | 8082 | Turns text into vectors for knowledge-base search. Multilingual, so a Spanish question can match an English page. Needs a llama.cpp build with EmbeddingGemma 2 support (ggml-org/llama.cpp PR #30054). |
 | Decision model | **Laya** (GGUF) via llama.cpp | 8081 | A fast "System 1" model: picks one option from a list (which skill should answer?) or gives a yes/no score (is this answer grounded?) in tens of milliseconds. Endpoint `/v1/systemone`. |
+| Cloned voice (optional) | **XTTS-v2** (Coqui, maintained as `coqui-tts`) in `jetson/tts_server.py` | 8083 | Speaks English, Spanish and French in one cloned voice (`SKYY_TTS=xtts`). Without it, the laptop speaks with Piper, one voice per language. See step 10. |
 | Vector database | **Qdrant** | 6333 (REST), 6334 (gRPC) | Stores the college knowledge base. Hybrid search: dense (EmbeddingGemma) plus sparse (BM25) vectors. |
 
 > **Why Laya and not Jev:** Jev is a hosted API, so using it would send visitors' questions off campus. Laya has open weights and runs locally on the Jetson.
@@ -222,6 +223,7 @@ The units in `jetson/systemd/` run each llama-server under systemd: they start a
 ```bash
 sudo ./jetson/install_services.sh          # main LLM (:8080) and EmbeddingGemma (:8082)
 sudo ./jetson/install_services.sh --laya   # also Laya (:8081)
+sudo ./jetson/install_services.sh --tts    # also the cloned voice (:8083, set it up first: step 10)
 ```
 
 Stop any llama-server you started by hand first, or the services can't get their ports. The script fills in your user and home folder, puts each model path in `/etc/skyy/<name>.env` (`llm`, `embed`, `laya`), and enables the services. Re-running it keeps existing `.env` files. For Laya, set the real filename in `/etc/skyy/laya.env` first.
@@ -231,6 +233,7 @@ Stop any llama-server you started by hand first, or the services can't get their
 | `skyy-llm` | 8080 | `/etc/skyy/llm.env` |
 | `skyy-embed` | 8082 | `/etc/skyy/embed.env` |
 | `skyy-laya` | 8081 | `/etc/skyy/laya.env` |
+| `skyy-tts` | 8083 | `/etc/skyy/tts.env` (`XTTS_MODEL_DIR`, `XTTS_VOICES_DIR`) |
 
 ```bash
 systemctl status skyy-llm skyy-embed
@@ -259,6 +262,28 @@ On Windows, if the link drops or requests fail at random (`ConnectionResetError 
 4. Quit VPNs (e.g. PIA) and check that security software isn't blocking the adapter.
 
 Test from the laptop: `curl.exe --noproxy "*" http://192.168.55.1:8080/v1/models`
+
+### 10. Cloned voice (XTTS-v2, optional)
+
+Piper has one voice per language, so Skyy sounds like a different person in English, Spanish and French. XTTS-v2 clones one voice from 30–60 s of recordings and speaks all three languages with it. It needs CUDA to keep up with speech, so it runs here, not on the laptop. There is no XTTS-v3: Coqui closed in 2024, and the code is kept up by Idiap as the `coqui-tts` package.
+
+> **Rights first.** Only clone a voice you may use. A cartoon character's voice (e.g. Jabberjaw) belongs to the studio, and the recording is a real actor's voice: fine for a private test, but the public kiosk needs written permission, or a consenting person (a student or staff member) recording a similar character voice. **The XTTS-v2 weights are under the Coqui Public Model License: non-commercial use only**, and a commercial license can no longer be bought. Confirm with MDC that the kiosk counts as non-commercial.
+
+1. Python environment with CUDA PyTorch (PyPI's `torch` has no Jetson GPU support; use NVIDIA's wheel for your JetPack version):
+   ```bash
+   python3 -m venv ~/skyy-tts-venv && source ~/skyy-tts-venv/bin/activate
+   pip install <torch and torchaudio wheels for your JetPack, from NVIDIA / jetson-ai-lab>
+   pip freeze | grep -E '^torch' > /tmp/torch-pin.txt     # keep NVIDIA's CUDA torch
+   pip install "coqui-tts[codec]" six fastapi uvicorn -c /tmp/torch-pin.txt
+   python -c "import torch; print(torch.cuda.is_available())"     # must print True
+   ```
+2. The model (~1.9 GB): `huggingface-cli download coqui/XTTS-v2 --local-dir ~/models/xtts_v2`
+3. The voice: on the laptop, put the clips in `voices/<name>/` (for example `voices/jabberjaw/01.wav …`) and check them with `python 11_voice_ref.py voices/jabberjaw` (its docstring shows how to remove music with Demucs and cut clips with ffmpeg). Copy the folder to `~/voices/` on the Jetson. The clips aren't in git (`*.wav` is ignored).
+4. Test by hand: `cd jetson && COQUI_TOS_AGREED=1 ~/skyy-tts-venv/bin/python tts_server.py`. It prints one `warm-up` line per language when it's ready (about 1 minute). Then from the laptop: `python 04_tts.py --engine xtts --jetson 192.168.55.1` (time to first audio per sentence, plays the three languages).
+5. Run it as a service: `sudo ./jetson/install_services.sh --tts` (step 8). Logs: `journalctl -u skyy-tts -f`; each sentence logs its time to first audio and real-time factor (RTF below 1 = faster than speech).
+6. On the laptop: `$env:SKYY_TTS = "xtts"` before `python 07_voice_webrtc.py` (or `--tts xtts` for step 6). `SKYY_TTS_VOICE` picks the voice folder (default `jabberjaw`). If the Jetson TTS can't be reached, Skyy keeps talking with Piper and tries XTTS again 30 s later.
+
+Tuning in `/etc/skyy/tts.env`: `XTTS_TEMPERATURE` (default 0.65; lower is steadier, higher more expressive), `XTTS_SPEED` (1.0), `XTTS_CHUNK` (20; smaller starts sooner but can click between chunks). XTTS shares the Orin's GPU with Gemma, which is still writing the answer while the first sentence is spoken: compare latencies with `SKYY_TTS=piper` and `xtts`.
 
 ---
 
@@ -313,7 +338,7 @@ Run them in order: each step checks one piece before the full loop.
 | `01_mic.py` | Lists audio devices, records a few seconds, reports level and clipping, plays it back. `--save samples/en1.wav` records test clips. |
 | `02_vad.py` | Silero VAD on the live mic or a file: prints when speech starts and ends, for tuning the silence wait (`--silence-ms`). |
 | `03_whisper.py` | Benchmarks Whisper on CPU/GPU/NPU: latency, real-time factor, transcript and detected language. `--lang es` forces a language. |
-| `04_tts.py` | Piper in English, Spanish and French: time to first audio per sentence, with playback. `--en/--es/--fr` compare voices. |
+| `04_tts.py` | Piper in English, Spanish and French: time to first audio per sentence, with playback. `--en/--es/--fr` compare voices. `--engine xtts --jetson 192.168.55.1` tests the cloned voice on the Jetson instead (`--save samples/xtts` keeps the audio). |
 | `05_llm.py` | Gemma on the Jetson: time to first token and tokens/s for EN/ES/FR prompts. Warns if "thinking" is on. |
 | `diag_stream.py` | Network diagnostic: repeats streaming requests over fresh connections to spot a flaky link. |
 | `06_voice_loop.py` | **Full voice loop**, laptop mic and speakers (PyAudio). Half-duplex by default (mic ignored while Skyy talks, so it can't hear itself); `--barge-in` with headphones. |
@@ -321,13 +346,14 @@ Run them in order: each step checks one piece before the full loop.
 | `08_kb_index.py` | Loads the MDC FAQ (`mdc_faq_kb_multilingual.jsonl`: each FAQ in English, Spanish and French) into Qdrant: EmbeddingGemma vectors for every entry, then test searches with timings and scores (to pick `SKYY_KB_MIN_SCORE`). Run as `python 08_kb_index.py --host 192.168.55.1`; `--test` only searches. Needs `SKYY_QDRANT_KEY`. Only needed for `SKYY_KB_MODE=rag`: the default `prompt` mode doesn't use Qdrant. |
 | `09_kb_latency.py` | Compares the knowledge-base modes (`off`, `prompt`, `rag`): time from question to the LLM's first token, retrieval included, and how many prompt tokens llama-server had to process. |
 | `10_kb_eval.py` | Quality of the knowledge base, on the test set `kb_eval_questions.jsonl` (each FAQ asked in a visitor's own words in EN/ES/FR, misheard versions like "corner rule", and off-topic questions). Retrieval: hit@1, hit@3 and MRR per language, plus the recommended `SKYY_KB_MIN_SCORE`. Answers in `rag` and `prompt` mode: key facts present, right language, off-topic declined, and a Gemma grade (correct, grounded). Run as `python 10_kb_eval.py --host 192.168.55.1` (~25 min; `--retrieval-only` ~1 min). Needs the collection from step 08 and `SKYY_QDRANT_KEY`. Results go to `eval_results/`. `--judge gemini` grades with Gemini (default `gemini-3.5-flash`, `--gemini-model` to change) instead of Gemma; it needs `GEMINI_API_KEY` and sends the test questions, answers and FAQ to Google, so only use it on this written test set. `--judge-test eval_results\kb_eval_<...>.jsonl --judges gemma gemini-2.5-flash gemini-3.5-flash` checks the judges themselves: it plants known errors in copies of good answers (changed number, wrong office or system, key step removed, yes/no flipped, wrong topic, "I don't have that information", an invented sentence), plus good variants that must pass (shortened to the key sentences, same answer in another language), and reports how many each judge gets right and where they disagree. |
+| `11_voice_ref.py` | Checks the reference clips for a cloned XTTS voice (`python 11_voice_ref.py voices/jabberjaw`): length, sample rate, mono, clipping, loudness and pauses per clip, and the total (aim for 30–60 s). See Part 1, step 10. |
 
 Shared modules used by steps 6 and 7:
 
 | Module | What it does |
 |---|---|
 | `ov_whisper_stt.py` | Pipecat speech-to-text service running Whisper on OpenVINO. Limits languages to EN/ES/FR: if Whisper detects another language (e.g. Italian or Portuguese from people nearby), it re-transcribes in the allowed languages and keeps the most confident result. Uses "Sky" and the FAQ's names (Gordon Rule, MDConnect, …) as a hint, so the wake word isn't heard as "Hi" (`SKYY_STT_HINT` changes the names). Drops repetition loops ("so, so, so, …") that Whisper produces on background noise. `SKYY_SAVE_AUDIO=1` saves each clip to `debug_audio/`. |
-| `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. |
+| `bilingual_tts.py` | Pipecat Piper service with one voice per language. Detects the language of each sentence and speaks it with the matching voice. `MultilingualXTTSService` (`SKYY_TTS=xtts`) sends each sentence with its language to the Jetson's XTTS server instead, so all three languages use one cloned voice; it holds a one-word opener ("Sí.") until the next clause, because XTTS garbles one-word inputs, and cuts inputs longer than XTTS's limit (~250 characters) at a comma. Both read links as their domain ("mdc.edu", not the whole URL) and drop markdown symbols. |
 | `wake.py` | The "Sky" wake word. While asleep, speech without "Sky" is ignored. After "Sky", Skyy stays awake until 6 s after its last answer (`--wake-timeout` / `SKYY_WAKE_TIMEOUT`), so follow-up questions don't need the wake word. Other people's speech doesn't keep it awake, but a question that starts inside that window is never cut off: Skyy stays awake until its transcript arrives (at most 20 s), even if the visitor pauses mid-question. Includes common Whisper spellings (Skye, Skype, …). |
 | `kb.py` | The MDC FAQ knowledge base. `SKYY_KB_MODE=prompt` (default): the whole English FAQ (~4k tokens) goes in the system prompt, which llama-server caches, so no per-turn retrieval. `rag`: `KnowledgeInjector` embeds each question with EmbeddingGemma, searches Qdrant and adds the top entries to the question (best language per FAQ, so the notes are usually in the visitor's language). `SKYY_KB` points to another FAQ file. `warm_up()` caches the system prompt at startup. |
 | `skyy_processors.py` | `WakeWordJoiner`: if you say "Sky", pause, then ask, both parts are joined into one question instead of a greeting plus an interruption. `SideTalkFilter`: while Skyy is awake, speech without "Sky" that is under 3 words or an unfinished sentence ("Let me mute it for a") is ignored as side conversation; short replies like "Yes" or "Gracias" still count. `HistoryCap`: the LLM sees at most 6 messages; once over, the history is cut back to the last exchange, so old or misheard exchanges don't pile up and llama-server can reuse its cached prompt between cuts (`SKYY_HISTORY`, `SKYY_HISTORY_KEEP`). |

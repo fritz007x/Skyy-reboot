@@ -4,6 +4,7 @@ mic -> Silero VAD -> Whisper (OpenVINO) -> Gemma on the Jetson -> Piper -> speak
 
   python 06_voice_loop.py --host 192.168.1.50
   python 06_voice_loop.py --host 192.168.1.50 --stt-device CPU --voice-es es_MX-ald-medium
+  python 06_voice_loop.py --host 192.168.1.50 --tts xtts   # one cloned voice (Jetson :8083)
 
 ECHO: this local transport has no echo cancellation. By default the mic is ignored
 while Skyy speaks (half-duplex), so it works on laptop speakers without Skyy hearing
@@ -29,7 +30,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair, LLMUserAggregatorParams)
 from pipecat.services.openai.llm import OpenAILLMService
-from bilingual_tts import MultilingualPiperTTSService
+from bilingual_tts import MultilingualPiperTTSService, MultilingualXTTSService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
@@ -47,6 +48,10 @@ ap.add_argument("--stt-device", default="GPU", help="NPU (Aura), GPU or CPU; fal
 ap.add_argument("--voice-en", default="en_US-lessac-medium", help="Piper voice for English")
 ap.add_argument("--voice-es", default="es_MX-claude-high", help="Piper voice for Spanish")
 ap.add_argument("--voice-fr", default="fr_FR-siwis-medium", help="Piper voice for French")
+ap.add_argument("--tts", choices=("piper", "xtts"), default="piper",
+                help="xtts: one cloned voice for all languages, from the Jetson (Piper as fallback)")
+ap.add_argument("--tts-port", type=int, default=8083, help="skyy-tts port on the Jetson")
+ap.add_argument("--tts-voice", default="jabberjaw", help="XTTS voice folder on the Jetson")
 ap.add_argument("--stop-secs", type=float, default=None,
                 help="silence that ends your turn (default 0.6 with wake word, 0.2 without)")
 ap.add_argument("--barge-in", action="store_true",
@@ -87,9 +92,12 @@ async def main():
         settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=150,
                                            extra={"extra_body": kb.NO_THINKING}))
 
-    # One Piper voice per language; each sentence is spoken in the voice of its language
-    tts = MultilingualPiperTTSService(voices={"en": a.voice_en, "es": a.voice_es, "fr": a.voice_fr},
-                                   download_dir=Path("models/piper"))
+    # One Piper voice per language; each sentence is spoken in the voice of its language.
+    # --tts xtts: one cloned voice for every language, Piper only if the Jetson TTS is down.
+    piper = dict(voices={"en": a.voice_en, "es": a.voice_es, "fr": a.voice_fr},
+                 download_dir=Path("models/piper"))
+    tts = (MultilingualXTTSService(base_url=f"http://{a.host}:{a.tts_port}", voice=a.tts_voice, **piper)
+           if a.tts == "xtts" else MultilingualPiperTTSService(**piper))
 
     context = LLMContext([{"role": "system", "content": SYSTEM}])
     agg = LLMContextAggregatorPair(context, user_params=LLMUserAggregatorParams(

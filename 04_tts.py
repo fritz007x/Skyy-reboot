@@ -3,13 +3,15 @@
   python 04_tts.py                                   # default English, Spanish and French voices
   python 04_tts.py --en en_US-lessac-high --es es_MX-ald-medium   # compare other voices
   python 04_tts.py --no-play                         # numbers only
+  python 04_tts.py --engine xtts --jetson 192.168.55.1   # the cloned voice on the Jetson (:8083)
+  python 04_tts.py --engine xtts --jetson 192.168.55.1 --voice jabberjaw --save samples/xtts
 
 Piper uses one model per voice/language. "First audio" is what matters for voice:
 Pipecat sends text to TTS sentence by sentence, so the listener waits for the
 first sentence, not the whole answer.
 Voices: https://huggingface.co/rhasspy/piper-voices (x_low/low < medium < high = slower, nicer)
 """
-import argparse, os, time
+import argparse, json, os, time, urllib.request, wave
 from pathlib import Path
 import numpy as np
 import sounddevice as sd
@@ -21,6 +23,11 @@ ap.add_argument("--en", default="en_US-lessac-medium")
 ap.add_argument("--es", default="es_MX-claude-high")
 ap.add_argument("--fr", default="fr_FR-siwis-medium")
 ap.add_argument("--no-play", action="store_true")
+ap.add_argument("--engine", choices=("piper", "xtts"), default="piper")
+ap.add_argument("--jetson", default="192.168.55.1", help="Jetson IP (xtts)")
+ap.add_argument("--tts-port", type=int, default=8083)
+ap.add_argument("--voice", default="jabberjaw", help="XTTS voice folder on the Jetson")
+ap.add_argument("--save", help="folder to save each language's audio as a .wav (xtts)")
 a = ap.parse_args()
 
 VOICE_DIR = Path("models/piper")
@@ -49,6 +56,47 @@ def load(voice):
 def speak(v, text):
     return np.concatenate([c.audio_float_array for c in v.synthesize(text)])
 
+
+def xtts_sentence(text, lang):
+    """POST one sentence to the Jetson; returns (seconds to first audio, int16 samples)."""
+    req = urllib.request.Request(
+        f"http://{a.jetson}:{a.tts_port}/tts_stream", method="POST",
+        data=json.dumps({"text": text, "language": lang, "voice": a.voice}).encode(),
+        headers={"Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # no proxy on the USB link
+    t0, first, pcm = time.perf_counter(), None, bytearray()
+    with opener.open(req, timeout=30) as r:
+        while chunk := r.read1(4096):
+            first = first or time.perf_counter() - t0
+            pcm += chunk
+    return first, np.frombuffer(bytes(pcm[:len(pcm) // 2 * 2]), dtype=np.int16)
+
+
+if a.engine == "xtts":   # one voice for all three languages, from jetson/tts_server.py
+    XTTS_SR = 24000
+    for lang, (_, text) in zip(("en", "es", "fr"), TESTS):
+        sentences = [s.strip() + "." for s in text.split(".") if s.strip()]
+        t0 = time.perf_counter()
+        firsts, parts = [], []
+        for s in sentences:
+            f, audio = xtts_sentence(s, lang)
+            firsts.append(f)
+            parts.append(audio)
+        total = time.perf_counter() - t0
+        audio = np.concatenate(parts)
+        dur = len(audio) / XTTS_SR
+        print(f"[{lang}] {a.voice}: first audio {firsts[0]*1000:5.0f} ms "
+              f"(per sentence {', '.join(f'{x*1000:.0f}' for x in firsts)} ms) | total {total:.2f} s "
+              f"for {dur:.1f} s speech (RTF {total/dur:.2f})")
+        if a.save:
+            Path(a.save).mkdir(parents=True, exist_ok=True)
+            with wave.open(str(Path(a.save) / f"{a.voice}_{lang}.wav"), "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(XTTS_SR)
+                w.writeframes(audio.tobytes())
+        if not a.no_play:
+            sd.play(audio, XTTS_SR)
+            sd.wait()
+    raise SystemExit
 
 for voice_name, text in TESTS:
     v = load(voice_name)

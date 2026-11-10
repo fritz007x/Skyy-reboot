@@ -27,6 +27,12 @@ Optional:
   $env:SKYY_STT_HINT = "MDC, Gordon Rule"   # names Whisper should expect (default: the FAQ's proper nouns)
   $env:SKYY_VOICE_ES = "es_MX-ald-medium"   # change the Spanish (or SKYY_VOICE_EN / SKYY_VOICE_FR) Piper voice
 
+One cloned voice for all three languages (XTTS-v2 on the Jetson, jetson/tts_server.py):
+  $env:SKYY_TTS = "xtts"              # default "piper" (one Piper voice per language)
+  $env:SKYY_TTS_VOICE = "jabberjaw"   # voice folder on the Jetson (default jabberjaw)
+  $env:SKYY_TTS_PORT = "8083"         # skyy-tts port (default 8083)
+  The Piper voices stay loaded: if the Jetson TTS can't be reached, Skyy speaks with Piper.
+
 Knowledge base (MDC FAQ, see kb.py; build the Qdrant collection once with 08_kb_index.py):
   $env:SKYY_KB_MODE = "prompt"  # prompt (default): whole FAQ in the cached system prompt; rag: EmbeddingGemma + Qdrant per question
                                 # off: no knowledge base
@@ -50,7 +56,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.openai.llm import OpenAILLMService
-from bilingual_tts import MultilingualPiperTTSService
+from bilingual_tts import MultilingualPiperTTSService, MultilingualXTTSService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 
@@ -70,6 +76,11 @@ STT_HINT = os.environ.get("SKYY_STT_HINT",
 VOICE_EN = os.environ.get("SKYY_VOICE_EN", "en_US-lessac-medium")
 VOICE_ES = os.environ.get("SKYY_VOICE_ES", "es_MX-claude-high")
 VOICE_FR = os.environ.get("SKYY_VOICE_FR", "fr_FR-siwis-medium")
+TTS_ENGINE = os.environ.get("SKYY_TTS", "piper").lower()
+TTS_PORT = int(os.environ.get("SKYY_TTS_PORT", "8083"))
+TTS_VOICE = os.environ.get("SKYY_TTS_VOICE", "jabberjaw")
+if TTS_ENGINE not in ("piper", "xtts"):
+    raise SystemExit(f"SKYY_TTS must be piper or xtts, not {TTS_ENGINE!r}")
 
 HALF_DUPLEX = os.environ.get("SKYY_HALF_DUPLEX") == "1"
 WAKE = os.environ.get("SKYY_NO_WAKE") != "1"
@@ -105,9 +116,12 @@ async def bot(runner_args: RunnerArguments):
         default_headers={"Connection": "close"},  # avoid stale keep-alive resets
         settings=OpenAILLMService.Settings(model="gemma", temperature=0.3, max_tokens=250,
                                            extra={"extra_body": kb.NO_THINKING}))
-    tts = MultilingualPiperTTSService(voices={"en": VOICE_EN, "es": VOICE_ES, "fr": VOICE_FR},
-                                   download_dir=Path("models/piper"),
-                                   user_language=lambda: stt.last_language)
+    piper = dict(voices={"en": VOICE_EN, "es": VOICE_ES, "fr": VOICE_FR},
+                 download_dir=Path("models/piper"), user_language=lambda: stt.last_language)
+    if TTS_ENGINE == "xtts":   # one cloned voice; the Piper voices are the fallback
+        tts = MultilingualXTTSService(base_url=f"http://{JETSON}:{TTS_PORT}", voice=TTS_VOICE, **piper)
+    else:
+        tts = MultilingualPiperTTSService(**piper)
 
     context = LLMContext([{"role": "system", "content": SYSTEM}])
     agg = LLMContextAggregatorPair(context, user_params=LLMUserAggregatorParams(
@@ -139,7 +153,8 @@ async def bot(runner_args: RunnerArguments):
         await task.cancel()
 
     logger.info(f"Connected. Half-duplex: {HALF_DUPLEX}. Wake word: {'Sky' if WAKE else 'off'}. "
-                f"Knowledge base: {kb.KB_MODE}. Speak through the browser.")
+                f"Knowledge base: {kb.KB_MODE}. "
+                f"TTS: {'XTTS ' + TTS_VOICE if TTS_ENGINE == 'xtts' else 'Piper'}. Speak through the browser.")
     await PipelineRunner(handle_sigint=runner_args.handle_sigint).run(task)
 
 

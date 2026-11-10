@@ -1,13 +1,15 @@
 """Check that everything is installed before running the test scripts.
 
   python check_setup.py                      # local checks
-  python check_setup.py --jetson 192.168.1.50   # also check the Jetson LLM
+  python check_setup.py --jetson 192.168.1.50   # also check the Jetson LLM and XTTS voice server
+  python check_setup.py --jetson 192.168.1.50 --tts-port 0   # ...without the XTTS check (Piper only)
 """
 import argparse, importlib, os, platform, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--jetson")
 ap.add_argument("--port", type=int, default=8080)
+ap.add_argument("--tts-port", type=int, default=8083, help="XTTS server on the Jetson; 0 to skip")
 a = ap.parse_args()
 
 ok = True
@@ -122,6 +124,18 @@ if a.jetson:
         return "model " + c.models.list().data[0].id
 
     check(f"LLM at {a.jetson}:{a.port}", llm)
+
+    # Only needed for SKYY_TTS=xtts, so a missing server is a warning, not a failure
+    if a.tts_port:
+        import json, urllib.request
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"http://{a.jetson}:{a.tts_port}/health", timeout=5) as r:
+                print(f"  [OK]   XTTS voice server at {a.jetson}:{a.tts_port}: "
+                      f"voices {', '.join(json.load(r)['voices'])}")
+        except Exception as e:
+            print(f"  [WARN] XTTS voice server at {a.jetson}:{a.tts_port}: {type(e).__name__}: {e} "
+                  f"(only needed for SKYY_TTS=xtts)")
 
 print("\nAll good - start with python 01_mic.py" if ok else
       "\nFix the [FAIL] lines above (see README > Troubleshooting), then run this again.")

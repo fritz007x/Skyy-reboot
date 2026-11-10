@@ -1,0 +1,18 @@
+[Unit]
+Description=Skyy TTS - XTTS-v2 cloned voice (:8083)
+After=network-online.target jetson-clocks.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=@USER@
+Environment=COQUI_TOS_AGREED=1 PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/skyy/tts.env
+ExecStart=@HOME@/skyy-tts-venv/bin/python @HERE@/tts_server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
