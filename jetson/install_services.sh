@@ -35,24 +35,27 @@ declare -A default_model=(
 )
 
 mkdir -p /etc/skyy
+venv="$RUN_HOME/skyy-tts-venv"
 for svc in "${services[@]}"; do
   name="${svc#skyy-}"
   env="/etc/skyy/$name.env"
   if [[ "$name" == tts ]]; then
-    [[ -f "$env" ]] || printf 'XTTS_MODEL_DIR=%s\nXTTS_VOICES_DIR=%s\n' \
-      "$RUN_HOME/models/xtts_v2" "$RUN_HOME/voices" > "$env"
+    [[ -f "$env" ]] || printf 'XTTS_VENV=%s\nXTTS_MODEL_DIR=%s\nXTTS_VOICES_DIR=%s\nXTTS_DEEPSPEED=1\n' \
+      "$venv" "$RUN_HOME/models/xtts_v2" "$RUN_HOME/voices" > "$env"
+    venv="$(sed -n 's/^XTTS_VENV=//p' "$env")"
+    venv="${venv:-$RUN_HOME/skyy-tts-venv}"   # .env files from before XTTS_VENV existed
     model="$(sed -n 's/^XTTS_MODEL_DIR=//p' "$env")"
     voices="$(sed -n 's/^XTTS_VOICES_DIR=//p' "$env")"
     [[ -f "$model/model.pth" ]] || echo "WARNING: $svc: no XTTS model in $model (fix XTTS_MODEL_DIR= in $env)" >&2
     ls "$voices"/*/*.wav >/dev/null 2>&1 || echo "WARNING: $svc: no voice clips in $voices/<voice>/*.wav" >&2
-    [[ -x "$RUN_HOME/skyy-tts-venv/bin/python" ]] || echo "WARNING: $svc: $RUN_HOME/skyy-tts-venv not found (see README)" >&2
+    [[ -x "$venv/bin/python" ]] || echo "WARNING: $svc: no venv at $venv (fix XTTS_VENV= in $env, see README)" >&2
   else
     [[ -f "$env" ]] || echo "MODEL=${default_model[$name]}" > "$env"
     model="$(sed -n 's/^MODEL=//p' "$env")"
     [[ -f "$model" ]] || echo "WARNING: $svc: model not found: $model (fix MODEL= in $env)" >&2
   fi
 
-  sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$RUN_HOME|g" -e "s|@HERE@|$HERE|g" \
+  sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$RUN_HOME|g" -e "s|@HERE@|$HERE|g" -e "s|@VENV@|$venv|g" \
     "$HERE/systemd/$svc.service" > "/etc/systemd/system/$svc.service"
 done
 

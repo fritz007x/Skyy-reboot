@@ -7,9 +7,11 @@ StartLimitBurst=5
 
 [Service]
 User=@USER@
-Environment=COQUI_TOS_AGREED=1 PYTHONUNBUFFERED=1
+Environment=COQUI_TOS_AGREED=1 PYTHONUNBUFFERED=1 CUDA_HOME=/usr/local/cuda
+# DeepSpeed loads its compiled kernels through ninja (in the venv) and may rebuild them with nvcc
+Environment=PATH=@VENV@/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/etc/skyy/tts.env
-ExecStart=@HOME@/skyy-tts-venv/bin/python @HERE@/tts_server.py
+ExecStart=@VENV@/bin/python @HERE@/tts_server.py
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

@@ -15,7 +15,9 @@ Setup (once, see README "Part 1 > 10. Cloned voice"):
   python3 -m venv ~/skyy-tts-venv && source ~/skyy-tts-venv/bin/activate
   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130   # JetPack 7
   pip freeze | grep -E '^torch' > ~/torch-pin.txt
-  pip install "coqui-tts[codec]" six fastapi uvicorn -c ~/torch-pin.txt
+  CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST=8.7 pip install "coqui-tts==0.26.2" \
+      "transformers==4.51.3" deepspeed ninja six fastapi uvicorn -c ~/torch-pin.txt
+  (DeepSpeed needs transformers < 4.57, hence coqui-tts 0.26.2; see README)
   huggingface-cli download coqui/XTTS-v2 --local-dir ~/models/xtts_v2
 
 Run by hand:  COQUI_TOS_AGREED=1 python tts_server.py   (as a service: install_services.sh --tts)

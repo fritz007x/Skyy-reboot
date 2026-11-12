@@ -308,17 +308,20 @@ Piper has one voice per language, so Skyy sounds like a different person in Engl
    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130   # or .../whl/cu132
    python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_capability()); x = torch.randn(1024, 1024, device='cuda'); print((x @ x).sum().item())"
    pip freeze | grep -E '^torch' > ~/torch-pin.txt     # stops coqui-tts from swapping in a CPU-only torch
-   pip install "coqui-tts[codec]" six fastapi uvicorn -c ~/torch-pin.txt
+   export CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST=8.7   # DeepSpeed compiles its kernels for the Orin
+   pip install "coqui-tts==0.26.2" "transformers==4.51.3" deepspeed ninja six fastapi uvicorn -c ~/torch-pin.txt
    python -c "import torch; print(torch.cuda.is_available())"     # still True
    ```
    The check must print `True`, `(8, 7)` and a number. A warning about compute capability 8.7 is harmless. If `cu130` fails, try `cu132`. On JetPack 6, PyTorch's index has no Jetson CUDA builds: use NVIDIA's wheel for your JetPack version (jetson-ai-lab) instead.
+
+   **Why DeepSpeed and these old versions:** on the Orin, one CPU core handing work to the GPU limits plain XTTS to about real time (RTF ~1.05, first audio ~0.9 s, GPU only 35–64% busy). DeepSpeed's merged kernels brought it to **RTF ~0.55 and first audio ~0.48 s** (measured 2026-11-12, other servers stopped). DeepSpeed doesn't work with `transformers` 4.57+ (`'DynamicCache' object has no attribute 'dtype'`), and coqui-tts 0.28 needs 4.57+, so this pins coqui-tts 0.26.2, the newest release that accepts `transformers` 4.51. DeepSpeed compiles its kernels on the first start (several minutes); later starts reuse them. Without DeepSpeed, install `"coqui-tts[codec]"` and set `XTTS_DEEPSPEED=0`.
 2. The model (~1.9 GB): `huggingface-cli download coqui/XTTS-v2 --local-dir ~/models/xtts_v2`
 3. The voice: on the laptop, put the clips in `voices/<name>/` (for example `voices/jabberjaw/01.wav …`) and check them with `python 11_voice_ref.py voices/jabberjaw` (its docstring shows how to remove music with Demucs and cut clips with ffmpeg). Copy the folder to `~/voices/` on the Jetson. The clips aren't in git (`*.wav` is ignored).
-4. Test by hand: `cd jetson && COQUI_TOS_AGREED=1 ~/skyy-tts-venv/bin/python tts_server.py`. It prints one `warm-up` line per language when it's ready (about 1 minute). Then from the laptop: `python 04_tts.py --engine xtts --jetson 192.168.55.1` (time to first audio per sentence, plays the three languages).
-5. Run it as a service: `sudo ./jetson/install_services.sh --tts` (step 8). Logs: `journalctl -u skyy-tts -f`; each sentence logs its time to first audio and real-time factor (RTF below 1 = faster than speech).
+4. Test by hand: `cd jetson && XTTS_DEEPSPEED=1 COQUI_TOS_AGREED=1 ~/skyy-tts-venv/bin/python tts_server.py`. It prints one `warm-up` line per language when it's ready (about 1 minute). Then from the laptop: `python 04_tts.py --engine xtts --jetson 192.168.55.1` (time to first audio per sentence, plays the three languages).
+5. Run it as a service: `sudo ./jetson/install_services.sh --tts` (step 8). It writes `/etc/skyy/tts.env` with `XTTS_VENV=~/skyy-tts-venv` and `XTTS_DEEPSPEED=1`; if your venv is elsewhere, fix `XTTS_VENV=` there and run the script again. Logs: `journalctl -u skyy-tts -f`; each sentence logs its time to first audio and real-time factor (RTF below 1 = faster than speech).
 6. On the laptop: `$env:SKYY_TTS = "xtts"` before `python 07_voice_webrtc.py` (or `--tts xtts` for step 6). `SKYY_TTS_VOICE` picks the voice folder (default `jabberjaw`). If the Jetson TTS can't be reached, Skyy keeps talking with Piper and tries XTTS again 30 s later.
 
-Tuning in `/etc/skyy/tts.env`: `XTTS_TEMPERATURE` (default 0.65; lower is steadier, higher more expressive), `XTTS_SPEED` (1.0), `XTTS_CHUNK` (20; smaller starts sooner but can click between chunks). XTTS shares the Orin's GPU with Gemma, which is still writing the answer while the first sentence is spoken: compare latencies with `SKYY_TTS=piper` and `xtts`.
+Tuning in `/etc/skyy/tts.env`: `XTTS_TEMPERATURE` (default 0.65; lower is steadier, higher more expressive), `XTTS_SPEED` (1.0), `XTTS_CHUNK` (20; smaller starts sooner but can click between chunks), `XTTS_MAX_PER_CHAR` (0.1: a sentence stops after 0.1 s per character + 2 s of audio, logged as `cut off … (runaway)`; a short or noisy reference clip can make XTTS babble on), `XTTS_DEEPSPEED` and `XTTS_FP16` (0 or 1). XTTS shares the Orin's GPU with Gemma, which is still writing the answer while the first sentence is spoken: compare latencies with `SKYY_TTS=piper` and `xtts`.
 
 ---
 
