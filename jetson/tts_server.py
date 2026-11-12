@@ -13,8 +13,9 @@ latents once at startup, so a request only pays for synthesis.
 
 Setup (once, see README "Part 1 > 10. Cloned voice"):
   python3 -m venv ~/skyy-tts-venv && source ~/skyy-tts-venv/bin/activate
-  pip install <PyTorch wheel for your JetPack>   # NVIDIA's Jetson wheels, not PyPI's torch
-  pip install coqui-tts fastapi uvicorn
+  pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130   # JetPack 7
+  pip freeze | grep -E '^torch' > ~/torch-pin.txt
+  pip install "coqui-tts[codec]" six fastapi uvicorn -c ~/torch-pin.txt
   huggingface-cli download coqui/XTTS-v2 --local-dir ~/models/xtts_v2
 
 Run by hand:  COQUI_TOS_AGREED=1 python tts_server.py   (as a service: install_services.sh --tts)
