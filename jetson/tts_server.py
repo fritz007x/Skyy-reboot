@@ -27,6 +27,12 @@ Environment:
   XTTS_TEMPERATURE  0.65                  lower = steadier, higher = more expressive
   XTTS_SPEED        1.0
   XTTS_CHUNK        20                    GPT tokens per streamed chunk (smaller = sooner first audio)
+  XTTS_DEEPSPEED    0                     1 = DeepSpeed inference kernels (pip install deepspeed).
+                                          On the Orin one CPU core feeding the GPU is the limit;
+                                          DeepSpeed's fused kernels cut that per-token work.
+  XTTS_FP16         0                     1 = run under fp16 autocast (less GPU work per token)
+  XTTS_MAX_PER_CHAR 0.1                   runaway guard: stop a sentence after
+                                          XTTS_MAX_PER_CHAR * characters + 2 s of audio
 
 XTTS-v2 weights are under the Coqui Public Model License: non-commercial use only.
 """
@@ -68,6 +74,9 @@ PORT = int(os.environ.get("XTTS_PORT", "8083"))
 TEMPERATURE = float(os.environ.get("XTTS_TEMPERATURE", "0.65"))
 SPEED = float(os.environ.get("XTTS_SPEED", "1.0"))
 CHUNK = int(os.environ.get("XTTS_CHUNK", "20"))
+DEEPSPEED = os.environ.get("XTTS_DEEPSPEED", "0") == "1"
+FP16 = os.environ.get("XTTS_FP16", "0") == "1"
+MAX_PER_CHAR = float(os.environ.get("XTTS_MAX_PER_CHAR", "0.1"))
 LANGUAGES = ("en", "es", "fr")   # XTTS knows more; Skyy only speaks these
 SAMPLE_RATE = 24000
 WARM_UP = {"en": "Hi, I'm Skyy.", "es": "Hola, soy Skyy.", "fr": "Bonjour, je suis Skyy."}
@@ -82,9 +91,10 @@ def load_model() -> Xtts:
     config = XttsConfig()
     config.load_json(str(MODEL_DIR / "config.json"))
     model = Xtts.init_from_config(config)
-    model.load_checkpoint(config, checkpoint_dir=str(MODEL_DIR), use_deepspeed=False)
+    model.load_checkpoint(config, checkpoint_dir=str(MODEL_DIR), use_deepspeed=DEEPSPEED)
     model.cuda().eval()
-    log(f"XTTS-v2 loaded from {MODEL_DIR} in {time.perf_counter() - t:.1f} s")
+    log(f"XTTS-v2 loaded from {MODEL_DIR} in {time.perf_counter() - t:.1f} s "
+        f"(deepspeed={DEEPSPEED}, fp16={FP16})")
     return model
 
 
@@ -103,20 +113,43 @@ def load_voices(model: Xtts) -> dict:
 
 
 def stream(text: str, language: str, voice: tuple):
-    """Yield 16-bit PCM byte chunks as XTTS generates them."""
+    """Yield 16-bit PCM byte chunks as XTTS generates them.
+
+    A noisy or short reference clip can make XTTS miss the end of the sentence and babble on
+    (one French sentence ran 27 s): stop once the audio is clearly too long for the text."""
     latent, embedding = voice
-    for chunk in model.inference_stream(
-            text, language, latent, embedding, stream_chunk_size=CHUNK,
-            temperature=TEMPERATURE, speed=SPEED, enable_text_splitting=False):
-        audio = chunk.float().clamp(-1, 1).cpu().numpy()
-        yield (audio * 32767).astype(np.int16).tobytes()
+    limit = int((MAX_PER_CHAR * len(text) + 2) * SAMPLE_RATE)
+    n = 0
+    gen = model.inference_stream(
+        text, language, latent, embedding, stream_chunk_size=CHUNK,
+        temperature=TEMPERATURE, speed=SPEED, enable_text_splitting=False)
+    try:
+        for chunk in gen:
+            audio = chunk.float().clamp(-1, 1).cpu().numpy()
+            if n + len(audio) > limit:
+                audio = audio[:max(limit - n, 0)]
+                yield (audio * 32767).astype(np.int16).tobytes()
+                log(f"cut off [{language}] at {limit / SAMPLE_RATE:.1f} s (runaway): {text[:40]}")
+                return
+            n += len(audio)
+            yield (audio * 32767).astype(np.int16).tobytes()
+    finally:
+        gen.close()
+
+
+def next_chunk(gen):
+    """One step of a stream() generator. Autocast is per thread, and each step may run in a
+    different worker thread, so it's entered around every step."""
+    with torch.autocast("cuda", dtype=torch.float16, enabled=FP16), torch.inference_mode():
+        return next(gen, None)
 
 
 model = load_model()
 VOICES = load_voices(model)
 for lang, text in WARM_UP.items():   # first CUDA run is slow; don't make a visitor wait for it
     t = time.perf_counter()
-    for _ in stream(text, lang, next(iter(VOICES.values()))):
+    gen = stream(text, lang, next(iter(VOICES.values())))
+    while next_chunk(gen) is not None:
         pass
     log(f"warm-up [{lang}] {time.perf_counter() - t:.2f} s")
 
@@ -154,7 +187,7 @@ async def tts_stream(req: Speak, request: Request):
             try:
                 while True:
                     # Each chunk is generated in a worker thread so the server stays responsive
-                    chunk = await asyncio.to_thread(next, gen, None)
+                    chunk = await asyncio.to_thread(next_chunk, gen)
                     if chunk is None:
                         break
                     if await request.is_disconnected():   # barge-in: stop using the GPU
