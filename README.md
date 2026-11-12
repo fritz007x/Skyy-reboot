@@ -57,7 +57,38 @@ du -sh ~/.cache/huggingface/hub/* 2>/dev/null | sort -h   # old model downloads
   sudo apt remove -s 'nsight-*'      # -s = simulate first; check that no cuda-* package is listed
   sudo apt remove 'nsight-*'
   ```
-- An NVMe SSD makes trying other models much easier.
+- Add an NVMe SSD (see below).
+
+#### NVMe SSD
+
+Keep booting from the eMMC and put the large folders on the SSD, with a symlink at each old path, so the services and `/etc/skyy/*.env` keep their paths. The SSD goes in the dev kit's M.2 **Key M** slot (underside; the other slot holds the Wi-Fi card). It must be NVMe, not M.2 SATA. Power off and unplug before fitting it. If `lspci` doesn't list it, reseat it and fit the retaining screw.
+
+1. Find it: `lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINT` should show `nvme0n1` with no partitions. **The next step erases it.**
+2. Partition, format and mount it at every boot (`nofail`: the Jetson still boots if the SSD dies):
+   ```bash
+   sudo parted -s /dev/nvme0n1 mklabel gpt mkpart ssd ext4 0% 100%
+   sudo mkfs.ext4 -L ssd /dev/nvme0n1p1
+   sudo mkdir -p /ssd
+   echo "UUID=$(sudo blkid -s UUID -o value /dev/nvme0n1p1) /ssd ext4 defaults,noatime,nofail 0 2" | sudo tee -a /etc/fstab
+   sudo systemctl daemon-reload && sudo mount -a && sudo chown $USER:$USER /ssd
+   ```
+3. Move the large folders and leave symlinks (a folder that doesn't exist yet gets an empty one on the SSD):
+   ```bash
+   sudo systemctl stop 'skyy-*'
+   mkdir -p ~/.cache
+   for d in models voices skyy-tts-venv .cache/huggingface; do
+     if [ -d ~/$d ] && [ ! -L ~/$d ]; then
+       mkdir -p "/ssd/$(dirname $d)"
+       rsync -a --info=progress2 ~/$d/ /ssd/$d/ && mv ~/$d ~/$d.old
+     fi
+     mkdir -p /ssd/$d
+     [ -e ~/$d ] || ln -s /ssd/$d ~/$d
+   done
+   df -h ~/models/ ~/voices/ ~/skyy-tts-venv/ ~/.cache/huggingface/   # each should be /dev/nvme0n1p1 on /ssd
+   ```
+   `~` itself stays on the eMMC: `df -h ~` still shows it, and that's expected.
+4. Start the services and check them (`sudo systemctl start skyy-llm skyy-embed`, then `curl localhost:8080/v1/models` and `:8082`). Only then delete the old copies: `rm -rf ~/*.old ~/.cache/*.old`.
+5. Large pip installs (for example torch in step 10) also use `~/.cache/pip` and `/tmp` on the eMMC. Point them at the SSD: `echo 'export TMPDIR=/ssd/tmp PIP_CACHE_DIR=/ssd/pip-cache' >> ~/.bashrc`, then `mkdir -p /ssd/tmp /ssd/pip-cache`.
 
 Rough disk budget: Gemma 4 26B-A4B ≈ 16 GB, Gemma 4 E4B ≈ 3–5 GB, EmbeddingGemma ≈ 0.6 GB, Laya ≈ 2 GB, Qdrant plus llama.cpp ≈ 1 GB.
 
@@ -269,14 +300,18 @@ Piper has one voice per language, so Skyy sounds like a different person in Engl
 
 > **Rights first.** Only clone a voice you may use. A cartoon character's voice (e.g. Jabberjaw) belongs to the studio, and the recording is a real actor's voice: fine for a private test, but the public kiosk needs written permission, or a consenting person (a student or staff member) recording a similar character voice. **The XTTS-v2 weights are under the Coqui Public Model License: non-commercial use only**, and a commercial license can no longer be bought. Confirm with MDC that the kiosk counts as non-commercial.
 
-1. Python environment with CUDA PyTorch (PyPI's `torch` has no Jetson GPU support; use NVIDIA's wheel for your JetPack version):
+1. Python environment with CUDA PyTorch. On JetPack 7 the standard ARM CUDA builds from PyTorch's own index work on the Orin. A plain `pip install torch` gives a CPU-only build, so always pass the index. The torch wheels and the NVIDIA libraries they pull in take several GB: with the SSD from step 2, put the venv, pip's cache and its temporary folder there first.
    ```bash
+   export TMPDIR=/ssd/tmp PIP_CACHE_DIR=/ssd/pip-cache && mkdir -p $TMPDIR $PIP_CACHE_DIR   # SSD only
    python3 -m venv ~/skyy-tts-venv && source ~/skyy-tts-venv/bin/activate
-   pip install <torch and torchaudio wheels for your JetPack, from NVIDIA / jetson-ai-lab>
-   pip freeze | grep -E '^torch' > /tmp/torch-pin.txt     # keep NVIDIA's CUDA torch
-   pip install "coqui-tts[codec]" six fastapi uvicorn -c /tmp/torch-pin.txt
-   python -c "import torch; print(torch.cuda.is_available())"     # must print True
+   pip install -U pip
+   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130   # or .../whl/cu132
+   python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_capability()); x = torch.randn(1024, 1024, device='cuda'); print((x @ x).sum().item())"
+   pip freeze | grep -E '^torch' > ~/torch-pin.txt     # stops coqui-tts from swapping in a CPU-only torch
+   pip install "coqui-tts[codec]" six fastapi uvicorn -c ~/torch-pin.txt
+   python -c "import torch; print(torch.cuda.is_available())"     # still True
    ```
+   The check must print `True`, `(8, 7)` and a number. A warning about compute capability 8.7 is harmless. If `cu130` fails, try `cu132`. On JetPack 6, PyTorch's index has no Jetson CUDA builds: use NVIDIA's wheel for your JetPack version (jetson-ai-lab) instead.
 2. The model (~1.9 GB): `huggingface-cli download coqui/XTTS-v2 --local-dir ~/models/xtts_v2`
 3. The voice: on the laptop, put the clips in `voices/<name>/` (for example `voices/jabberjaw/01.wav …`) and check them with `python 11_voice_ref.py voices/jabberjaw` (its docstring shows how to remove music with Demucs and cut clips with ffmpeg). Copy the folder to `~/voices/` on the Jetson. The clips aren't in git (`*.wav` is ignored).
 4. Test by hand: `cd jetson && COQUI_TOS_AGREED=1 ~/skyy-tts-venv/bin/python tts_server.py`. It prints one `warm-up` line per language when it's ready (about 1 minute). Then from the laptop: `python 04_tts.py --engine xtts --jetson 192.168.55.1` (time to first audio per sentence, plays the three languages).
